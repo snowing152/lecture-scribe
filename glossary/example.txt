@@ -1,0 +1,5 @@
+# One term per line, "korean: english".
+# Blank lines and lines starting with # are ignored.
+운영체제: operating system
+문맥 교환: context switch
+교착 상태: deadlock

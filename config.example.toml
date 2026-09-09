@@ -1,0 +1,18 @@
+[audio]
+device = "fifine Microphone Analog Stereo"          # "auto" = monitor of the current output device
+sample_rate = 16000
+silence_rms = 0.001      # blocks quieter than this count as silence
+
+[asr]
+model = "large-v3"
+gpu = false
+language = "ko"
+beam_size = 5
+
+[output]
+dir = "~/lectures"
+paragraph_gap = 1.2      # seconds of pause that break a paragraph
+low_confidence = -1.0    # avg_logprob below this gets the (?) marker
+
+[glossary]
+dir = "glossary"
