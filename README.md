@@ -35,7 +35,9 @@ uv run scribe doctor                  # first command to run on a new machine
 | `scribe text audio.wav` | transcribe one or more recordings, writing `transcript.txt` |
 | `scribe find "기말고사"` | search every transcript — *step 5* |
 
-Prefix them with `uv run`. While recording, one line keeps updating:
+Prefix them with `uv run`, or run `uv tool install --editable .` once to get a
+plain `scribe` on your `PATH` — editable, so `git pull` picks up changes
+without reinstalling. While recording, one line keeps updating:
 
 ```
   0:12:34    -27.8 dBFS  [######------]    23.7 MB
@@ -43,6 +45,41 @@ Prefix them with `uv run`. While recording, one line keeps updating:
 
 If the first ten seconds are silent it says so and **keeps recording** — a
 false alarm should never cost a lecture.
+
+## Typical workflow
+
+Once per machine, or after moving the tool to a new one:
+
+```bash
+scribe doctor
+```
+
+Get the lecture audio playing (a browser tab is enough), then record until
+it ends:
+
+```bash
+scribe rec --course os          # Ctrl+C when the lecture ends
+```
+
+Transcribe afterwards, on the same machine or a faster one, whenever
+convenient — recording and transcription never have to happen back to back:
+
+```bash
+scribe text ~/lectures/2026-09-09_os/audio.wav
+```
+
+`text` takes more than one file and loads the model once for all of them,
+which is the way to catch up on a week of recordings in one go:
+
+```bash
+scribe text ~/lectures/*/audio.wav
+scribe text --model large-v3 audio.wav      # override without touching config.toml
+```
+
+`rec --then-text` and the important-moment hotkey would collapse the last
+two steps into one, but neither is wired up yet — recording and
+transcription are always two separate commands for now (see the roadmap in
+`CLAUDE.md`).
 
 ## What you get
 

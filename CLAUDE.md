@@ -111,5 +111,5 @@ uv run scribe doctor         # what the tool can see on this machine
 | 1 | `audio_capture.py`, `scribe rec` | done |
 | 2 | `transcribe.py`, `scribe text`, flat output | done |
 | 3 | `format_text.py`: paragraphs, `[MM:SS]` timecodes, `>>>` markers | done |
-| 4 | `--then-text`, important-moment hotkey, free space check | |
+| 4 | `--then-text`, important-moment hotkey, free space check | in progress — free space check (`scribe doctor`) and `>>>` mark rendering (`format_text.render_transcript`, `marks=`) done; `--then-text` flag parses but is stubbed; hotkey capture not started |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |
