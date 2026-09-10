@@ -22,8 +22,23 @@ BLOCK_FRAMES = 1024
 """Frames read at a time, about 64 ms at 16 kHz."""
 
 _CAPTURE_CHANNELS = 2
-_SILENCE_CHECK_SECONDS = 10.0
 _WAV_HEADER_BYTES = 44
+
+_SILENCE_CHECK_SECONDS = 10.0
+"""How much audio the opening silence check covers.
+
+Short on purpose: a lecture being recorded from the wrong device is worth
+knowing about while there is still time to start again.
+"""
+
+_SILENCE_WINDOW_SECONDS = 120.0
+"""How much audio each later silence check covers.
+
+Long on purpose: a lecturer pausing, or a slide nobody talks over, is not a
+fault, while two silent minutes means the sound stopped arriving. The stretch
+is measured in whole windows, so a device that goes quiet is reported between
+two and four minutes later rather than at once.
+"""
 
 # Characters Windows rejects in a path component.
 _FORBIDDEN_IN_NAMES = frozenset('<>:"/\\|?*')
@@ -224,8 +239,11 @@ def record_loopback(
         path: WAV file to create. Its parent directory must already exist.
         sample_rate: Recording rate in Hz.
         stop: Event that ends the recording, set from a signal handler.
-        silence_rms: Level below which the opening seconds count as silence
-            and a warning is raised. Zero disables the check.
+        silence_rms: Level below which a stretch of audio counts as silence
+            and a warning is raised -- first over the opening seconds, then
+            over every couple of minutes for the rest of the lecture, since
+            the output a lecture plays through can change while it runs.
+            Zero disables the check.
         on_progress: Called after every block with the current state.
 
     Returns:
@@ -243,8 +261,13 @@ def record_loopback(
     energy = 0.0
     peak = 0.0
     interrupted: str | None = None
-    silence_checked = silence_rms <= 0.0
-    silence_frames = int(_SILENCE_CHECK_SECONDS * sample_rate)
+
+    watching = silence_rms > 0.0
+    watched_frames = 0
+    watched_energy = 0.0
+    window_frames = int(_SILENCE_CHECK_SECONDS * sample_rate)
+    opening = True
+    silent = False
 
     # A full disk, an unplugged device or a sound server going away all reach
     # here as OSError or RuntimeError. Leaving the `with` closes the file on
@@ -276,14 +299,22 @@ def record_loopback(
                 peak = max(peak, float(np.max(np.abs(mono))))
 
                 warning = None
-                if not silence_checked and frames >= silence_frames:
-                    silence_checked = True
-                    if math.sqrt(energy / frames) < silence_rms:
-                        warning = (
-                            f"the first {_SILENCE_CHECK_SECONDS:.0f} seconds are "
-                            f"silent, check that the lecture plays through "
-                            f"'{device.name}' -- recording continues"
+                watched_frames += len(mono)
+                watched_energy += block_energy
+                if watching and watched_frames >= window_frames:
+                    quiet = math.sqrt(watched_energy / watched_frames) < silence_rms
+                    # Only the fall into silence is worth a line. Repeating it
+                    # every window would bury the one that matters, and the
+                    # sound coming back re-arms it for the next time.
+                    if quiet and not silent:
+                        warning = _silence_warning(
+                            device, watched_frames / sample_rate, opening=opening
                         )
+                    silent = quiet
+                    watched_frames = 0
+                    watched_energy = 0.0
+                    opening = False
+                    window_frames = int(_SILENCE_WINDOW_SECONDS * sample_rate)
 
                 if on_progress is not None:
                     on_progress(
@@ -308,6 +339,32 @@ def record_loopback(
         peak=peak,
         mean_rms=math.sqrt(energy / frames) if frames else 0.0,
         interrupted=interrupted,
+    )
+
+
+def _silence_warning(device: LoopbackDevice, seconds: float, *, opening: bool) -> str:
+    """Word the warning for a stretch that turned out to be silent.
+
+    Args:
+        device: Device being recorded, named so it can be checked.
+        seconds: Length of the stretch that was silent.
+        opening: Whether this is the check on the opening seconds rather than
+            one of the later ones.
+
+    Returns:
+        One line for the front end to show. A silent stretch is never a
+        reason to stop: the recording carries on either way, and a lecture
+        half of which came through is worth more than none of it.
+    """
+    if opening:
+        return (
+            f"the first {seconds:.0f} seconds are silent, check that the "
+            f"lecture plays through '{device.name}' -- recording continues"
+        )
+    return (
+        f"nothing has been heard from '{device.name}' for the last "
+        f"{seconds / 60:.0f} minutes; if the sound moved to another output, "
+        "stop and start again -- recording continues"
     )
 
 

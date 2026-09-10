@@ -12,3 +12,5 @@ beam_size = 5
 [output]
 dir = "~/lectures"
 paragraph_gap = 1.2      # seconds of pause that break a paragraph
+paragraph_target = 90    # ... and past this long, break at the next sentence
+paragraph_max = 180      # ... and past this long, break at the next segment

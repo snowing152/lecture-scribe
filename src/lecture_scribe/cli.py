@@ -285,7 +285,8 @@ def _text(config: Config, wavs: list[Path]) -> int:
 
     One bad file is reported and skipped rather than aborting the rest of the
     batch; a missing model affects every file identically and aborts
-    immediately instead.
+    immediately instead. Ctrl+C ends the whole batch: it is the user saying
+    they want their machine back, not that this one file is unwanted.
 
     Args:
         config: Effective configuration, command line overrides applied.
@@ -311,10 +312,25 @@ def _text(config: Config, wavs: list[Path]) -> int:
     except TranscriptionError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        # Loading, and on the first run downloading, is the one stretch a
+        # press should end outright: nothing has been read or written yet.
+        print("\ninterrupted while loading the model.", file=sys.stderr)
+        return 130
 
     status = _StatusLine()
+    # Installed only now: a Ctrl+C during a model download of several
+    # gigabytes should still stop it dead, and nothing is at stake yet.
+    stop = threading.Event()
+    _install_stop_handler(stop, absorb_repeats=False)
+
     for wav in existing:
         print(f"\n{wav}")
+        # The decoder scans the whole file for speech before it yields the
+        # first segment -- 21 seconds on an 81 minute lecture -- and the
+        # progress line cannot start until then. Saying so beats a dead
+        # terminal that looks like a hang.
+        status.draw("  reading the recording and finding the speech in it ...")
         try:
             result = transcribe(
                 model,
@@ -322,13 +338,25 @@ def _text(config: Config, wavs: list[Path]) -> int:
                 language=config.asr.language,
                 beam_size=config.asr.beam_size,
                 on_progress=lambda decoding: status.draw(_decoding_line(decoding)),
+                stop=stop,
             )
         except TranscriptionError as error:
             status.clear()
             print(f"  error: {error}", file=sys.stderr)
             failures += 1
             continue
+        except KeyboardInterrupt:
+            status.clear()
+            print("\n  interrupted; nothing was written.", file=sys.stderr)
+            return 130
         status.clear()
+
+        if result.interrupted is not None:
+            # Half a lecture written to transcript.txt would read as a whole
+            # one, and would sit on top of a complete transcript from an
+            # earlier run. The partial segments are dropped instead.
+            print(f"  {result.interrupted}.", file=sys.stderr)
+            return 1
 
         text_path = wav.parent / "transcript.txt"
         text_path.write_text(
@@ -339,6 +367,8 @@ def _text(config: Config, wavs: list[Path]) -> int:
                 language=config.asr.language,
                 audio_duration=result.audio_duration,
                 paragraph_gap=config.output.paragraph_gap,
+                paragraph_target=config.output.paragraph_target,
+                paragraph_max=config.output.paragraph_max,
             ),
             encoding="utf-8",
         )
@@ -359,18 +389,26 @@ def _text(config: Config, wavs: list[Path]) -> int:
     return 1 if failures else 0
 
 
-def _install_stop_handler(stop: threading.Event) -> None:
-    """Make Ctrl+C end the recording instead of raising KeyboardInterrupt.
-
-    Further presses are absorbed on purpose: by then the loop has already been
-    left and the file is being closed, which is the moment worth protecting.
+def _install_stop_handler(
+    stop: threading.Event, *, absorb_repeats: bool = True
+) -> None:
+    """Make Ctrl+C end the work in hand instead of raising KeyboardInterrupt.
 
     Args:
-        stop: Event the recording loop watches.
+        stop: Event the working loop watches.
+        absorb_repeats: Whether later presses are swallowed as well.
+            Recording wants them swallowed: by then the loop has been left and
+            the WAV is being closed, which is the moment worth protecting.
+            Recognition does not: the decoder scans a long file for half a
+            minute before it reaches a point where it can give up, and it
+            writes nothing until it is finished, so a second press should get
+            the user out at once.
     """
 
     def handle(_signum: int, _frame: FrameType | None) -> None:
         stop.set()
+        if not absorb_repeats:
+            signal.signal(signal.SIGINT, signal.default_int_handler)
 
     signal.signal(signal.SIGINT, handle)
     # A logout or a plain `kill` should end the lecture the same way.
@@ -488,6 +526,10 @@ def _doctor(config: Config) -> int:
     print("system")
     _row("os", f"{platform.system()} {platform.release()} ({platform.machine()})")
     _row("python", platform.python_version())
+    # Which environment this is matters more than it looks: a checkout and a
+    # `uv tool install` are separate, and one can hold the CUDA library while
+    # the other does not.
+    _row("environment", sys.prefix)
     _row(
         "config",
         str(config.source) if config.source else f"defaults, no ./{CONFIG_FILENAME}",
@@ -556,7 +598,18 @@ def _asr_report(config: Config) -> list[str]:
     )
 
     if config.asr.gpu and not gpu.available:
-        return ["asr.gpu is true but no CUDA device is usable"]
+        if gpu.device_count == 0:
+            return ["asr.gpu is true but no CUDA device is usable"]
+        # The library has to sit in the environment scribe is started from,
+        # and a checkout and a `uv tool install` are two different ones. This
+        # is worth spelling out: installing into the wrong one looks like it
+        # worked and changes nothing.
+        return [
+            "asr.gpu is true but cuBLAS is missing from the environment "
+            "above. Install it where scribe starts from: 'uv sync --extra "
+            "cuda' for a checkout, or 'uv tool install --editable \".[cuda]\" "
+            "--force' for the scribe on your PATH."
+        ]
     return []
 
 

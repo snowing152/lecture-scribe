@@ -224,11 +224,16 @@ class _RecordWorker(QThread):
 
 
 class _TranscribeWorker(QThread):
-    """Loads the model and transcribes one recording off the GUI thread."""
+    """Loads the model and transcribes one recording off the GUI thread.
+
+    Recognition can be given up part way through, which is what lets the
+    window close during the twenty minutes a long lecture takes.
+    """
 
     staged = Signal(str)
     progressed = Signal(Decoding)
     transcribed = Signal(Path, str, Transcription)
+    stopped = Signal(str)
     failed = Signal(str)
 
     def __init__(self, config: Config, wav: Path, marks: list[float]) -> None:
@@ -243,6 +248,11 @@ class _TranscribeWorker(QThread):
         self._config = config
         self._wav = wav
         self._marks = marks
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        """Ask recognition to give up at the end of the segment it is on."""
+        self._stop.set()
 
     def run(self) -> None:
         """Recognise the recording and write ``transcript.txt`` beside it."""
@@ -254,7 +264,10 @@ class _TranscribeWorker(QThread):
             self.failed.emit(str(error))
             return
 
-        self.staged.emit("decoding, this takes a while ...")
+        # The decoder scans the whole file for speech before the first
+        # segment exists, which on a long lecture is a good twenty seconds
+        # with nothing moving on screen.
+        self.staged.emit("reading the recording and finding the speech in it ...")
         try:
             result = transcribe(
                 model,
@@ -262,9 +275,17 @@ class _TranscribeWorker(QThread):
                 language=asr.language,
                 beam_size=asr.beam_size,
                 on_progress=self.progressed.emit,
+                stop=self._stop,
             )
         except TranscriptionError as error:
             self.failed.emit(str(error))
+            return
+
+        if result.interrupted is not None:
+            # Nothing is written. Half a lecture in transcript.txt would read
+            # as a whole one, and would replace a complete transcript that an
+            # earlier run had left there.
+            self.stopped.emit(result.interrupted)
             return
 
         text = render_transcript(
@@ -274,6 +295,8 @@ class _TranscribeWorker(QThread):
             language=asr.language,
             audio_duration=result.audio_duration,
             paragraph_gap=self._config.output.paragraph_gap,
+            paragraph_target=self._config.output.paragraph_target,
+            paragraph_max=self._config.output.paragraph_max,
             marks=self._marks,
         )
         path = self._wav.parent / "transcript.txt"
@@ -404,6 +427,7 @@ class _Window(QWidget):
         self._transcriber: _TranscribeWorker | None = None
         self._recording = False
         self._transcribing = False
+        self._closing = False
         self._wav: Path | None = None
         self._marks: list[float] = []
         self._elapsed = 0.0
@@ -713,7 +737,12 @@ class _Window(QWidget):
         )
 
     def _start_transcription(self) -> None:
-        """Hand the recording just made to a worker for recognition."""
+        """Start recognition, or give up the one that is running."""
+        if self._transcribing and self._transcriber is not None:
+            self._say("stopping recognition ...")
+            self._text.setEnabled(False)
+            self._transcriber.stop()
+            return
         if self._wav is None:
             return
         self._transcript.clear()
@@ -721,6 +750,7 @@ class _Window(QWidget):
         worker.staged.connect(self._say)
         worker.progressed.connect(self._on_decoding)
         worker.transcribed.connect(self._on_transcribed)
+        worker.stopped.connect(self._on_transcribe_stopped)
         worker.failed.connect(self._on_transcribe_failed)
         worker.finished.connect(self._release_transcriber)
 
@@ -770,6 +800,18 @@ class _Window(QWidget):
         )
         self._refresh()
 
+    def _on_transcribe_stopped(self, message: str) -> None:
+        """Report recognition the user gave up on, which is not a failure.
+
+        Args:
+            message: What was recognised before it stopped, and what that
+                leaves behind.
+        """
+        self._transcribing = False
+        self._meter.reset()
+        self._say(message)
+        self._refresh()
+
     def _on_transcribe_failed(self, message: str) -> None:
         """Report a recognition that could not be completed."""
         self._transcribing = False
@@ -794,6 +836,10 @@ class _Window(QWidget):
                 problem=True,
             )
             self._refresh()
+        if self._closing:
+            # The window is already hidden and the worker is now finished, so
+            # there is no thread left to be destroyed under a running loop.
+            QApplication.quit()
 
     def _refresh(self) -> None:
         """Bring every control into line with what the window is doing."""
@@ -805,7 +851,8 @@ class _Window(QWidget):
         )
         self._mark.setEnabled(self._recording)
         self._open.setEnabled(idle)
-        self._text.setEnabled(idle and self._wav is not None)
+        self._text.setText("stop" if self._transcribing else "transcribe")
+        self._text.setEnabled(self._transcribing or (idle and self._wav is not None))
         self._course.setEnabled(idle)
         self._device_box.setEnabled(idle)
 
@@ -825,21 +872,34 @@ class _Window(QWidget):
         self._status.setText(message)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
-        """End a running recording cleanly before the window goes away.
+        """End what is running before the window goes away.
 
-        Recognition cannot be interrupted part way through a file, so closing
-        during it is confirmed rather than done quietly.
+        Recognition is asked to give up rather than waited for on this
+        thread. A stop lands at the end of the segment being decoded, and
+        before the first segment exists the decoder is scanning the file for
+        speech -- 21 seconds on a measured 81 minute lecture. Holding the
+        window on screen for that long would be indistinguishable from a
+        hang, so it disappears at once and the process leaves once the worker
+        has really finished. Waiting for that matters: a QThread destroyed
+        while it is still running takes the whole process down with it.
         """
         if self._transcribing:
             answer = QMessageBox.question(
                 self,
                 "lecture scribe",
-                "Recognition is still running and cannot be resumed.\n"
-                "The recording is already safe on disk. Close anyway?",
+                "Recognition is still running.\n"
+                "Stopping it throws away what has been recognised so far; the "
+                "recording itself is safe on disk. Close anyway?",
             )
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+            self._closing = True
+            if self._transcriber is not None:
+                self._transcriber.stop()
+            self.hide()
+            event.ignore()
+            return
 
         if self._recorder is not None:
             self._recorder.stop()

@@ -5,16 +5,26 @@ loads a model once and reuses it for every WAV given on the command line,
 since loading alone can take longer than transcribing a short recording.
 """
 
+import ctypes
 import os
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from importlib.util import find_spec
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
 # Standard faster-whisper model names live under this Hugging Face account.
 _REPO_DIR_TEMPLATE = "models--Systran--faster-whisper-{name}"
+
+_CUDA_PACKAGES = ("nvidia.cublas", "nvidia.cuda_nvrtc")
+"""Packages the ``cuda`` extra unpacks the CUDA shared libraries into."""
+
+# The one CUDA library this CTranslate2 build reaches for. It carries no
+# cuDNN reference at all, whatever the faster-whisper documentation says.
+_CUBLAS_LIBRARY = "cublas64_12.dll" if os.name == "nt" else "libcublas.so.12"
 
 
 class TranscriptionError(Exception):
@@ -41,7 +51,8 @@ class GpuStatus:
     """Whether CUDA is usable for decoding.
 
     Attributes:
-        available: Whether at least one CUDA device was found.
+        available: Whether decoding on the GPU would actually run here, which
+            takes both a device and the CUDA library to drive it.
         device_count: Number of CUDA devices visible to CTranslate2.
         detail: One line description for the doctor report.
     """
@@ -115,11 +126,17 @@ class Transcription:
             a generator.
         audio_duration: Length of the source audio in seconds.
         decode_seconds: Wall-clock time the decoder took.
+        interrupted: Why recognition gave up before the end of the file, or
+            ``None`` when it ran to the last segment. The segments already
+            decoded are handed back either way, but they cover only the part
+            of the lecture named in the message, so a transcript written from
+            them would look finished while stopping mid-lecture.
     """
 
     segments: list[Segment]
     audio_duration: float
     decode_seconds: float
+    interrupted: str | None = None
 
 
 def compute_type(gpu: bool) -> str:
@@ -181,12 +198,13 @@ def model_status(name: str) -> ModelStatus:
 
 
 def gpu_status() -> GpuStatus:
-    """Report whether CTranslate2 can see a CUDA device.
+    """Report whether the GPU could decode a lecture on this machine.
 
-    This only asks the CUDA driver how many devices exist; it does not load
-    cuBLAS or cuDNN, so a missing runtime library is not caught here. That
-    failure surfaces instead as a :class:`TranscriptionError` from
-    :func:`load_model`, the first place a model actually runs a forward pass.
+    Two separate things have to hold: the driver must show a device, and
+    cuBLAS must be loadable. A machine can easily have the first without the
+    second, which used to be found out twenty minutes into a lecture rather
+    than here -- CTranslate2 asks for the library at its first forward pass,
+    not when the model is loaded.
 
     Returns:
         The device count plus a line explaining it, including the reason when
@@ -206,12 +224,15 @@ def gpu_status() -> GpuStatus:
 
     if count == 0:
         return GpuStatus(False, 0, "no CUDA device, decoding runs on the CPU")
-    return GpuStatus(
-        True,
-        count,
-        f"{count} CUDA device(s) visible "
-        "(cuBLAS and cuDNN are loaded only when asr.gpu = true)",
-    )
+
+    if not _cublas_available():
+        return GpuStatus(
+            False,
+            count,
+            f"{count} CUDA device(s) visible, but {_CUBLAS_LIBRARY} cannot "
+            "be loaded in this environment",
+        )
+    return GpuStatus(True, count, f"{count} CUDA device(s) visible, cuBLAS ready")
 
 
 def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped library)
@@ -232,6 +253,8 @@ def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped librar
     """
     faster_whisper = _import_faster_whisper()
     device = "cuda" if gpu else "cpu"
+    if gpu:
+        _preload_cuda_libraries()
     try:
         return faster_whisper.WhisperModel(
             model, device=device, compute_type=compute_type(gpu)
@@ -247,6 +270,7 @@ def transcribe(
     language: str,
     beam_size: int,
     on_progress: Callable[[Decoding], None] | None = None,
+    stop: threading.Event | None = None,
 ) -> Transcription:
     """Recognise the speech in one WAV file.
 
@@ -266,9 +290,15 @@ def transcribe(
         on_progress: Called with each segment as the decoder finishes it.
             The total length is known before the first one arrives, so a
             caller can show real progress rather than a spinner.
+        stop: Event that ends recognition early, leaving the segments decoded
+            so far on the result with a reason. It is read between segments,
+            and the decoder scans the whole file for speech before yielding
+            the first one -- 21 seconds on a measured 81 minute lecture --
+            so a stop set at the very beginning takes that long to bite.
 
     Returns:
-        The recognised segments plus timing.
+        The recognised segments plus timing, and why it stopped if it did
+        not reach the end.
 
     Raises:
         TranscriptionError: The file could not be decoded, or GPU decoding
@@ -276,6 +306,7 @@ def transcribe(
     """
     start = time.monotonic()
     segments: list[Segment] = []
+    interrupted: str | None = None
     try:
         raw_segments, info = model.transcribe(
             str(wav),
@@ -306,6 +337,17 @@ def transcribe(
                         text=segment.text,
                     )
                 )
+            # Asked between segments rather than inside one: a segment being
+            # decoded is already paid for, and abandoning the generator is
+            # what actually stops the work.
+            if stop is not None and stop.is_set():
+                minutes, seconds = divmod(int(segment.end), 60)
+                interrupted = (
+                    f"recognition was stopped {minutes}:{seconds:02d} into the "
+                    "recording, so nothing was written; the recording itself "
+                    "is untouched and can be transcribed again"
+                )
+                break
     except (OSError, RuntimeError) as error:
         raise TranscriptionError(f"cannot transcribe {wav}: {error}") from error
 
@@ -313,7 +355,67 @@ def transcribe(
         segments=segments,
         audio_duration=audio_duration,
         decode_seconds=time.monotonic() - start,
+        interrupted=interrupted,
     )
+
+
+def _cublas_available() -> bool:
+    """Whether the CUDA library CTranslate2 needs can be loaded.
+
+    Returns:
+        Whether cuBLAS is reachable, from the environment's own copy or from
+        a system-wide install. Loading it costs a memory mapping and no
+        decoding, so it is cheap enough to ask in the doctor report.
+    """
+    _preload_cuda_libraries()
+    try:
+        ctypes.CDLL(_CUBLAS_LIBRARY)
+    except OSError:
+        return False
+    return True
+
+
+def _preload_cuda_libraries() -> None:
+    """Make the CUDA libraries inside the virtual environment findable.
+
+    CTranslate2 reaches for ``libcublas.so.12`` with a bare ``dlopen``, which
+    searches the system directories and never looks inside the environment
+    the ``cuda`` extra installed it into. Loading each library here by its
+    full path registers its soname with the loader, so CTranslate2's own
+    dlopen finds it already in memory. The alternative is an LD_LIBRARY_PATH
+    exported before every run, which a desktop menu entry cannot do.
+
+    A library that will not load is passed over rather than reported. The
+    error worth showing is CTranslate2's own, which names what it wanted.
+    """
+    libraries: list[Path] = []
+    for package in _CUDA_PACKAGES:
+        try:
+            spec = find_spec(package)
+        except ImportError:
+            continue
+        if spec is None or spec.submodule_search_locations is None:
+            continue
+        for location in spec.submodule_search_locations:
+            root = Path(location)
+            # The wheels put shared objects under lib/ and DLLs under bin/.
+            # Only the first of the two has been run here.
+            libraries += sorted(root.glob("lib/lib*.so.*"))
+            libraries += sorted(root.glob("bin/*.dll"))
+
+    # Two passes: these libraries carry no RUNPATH, so one that needs a
+    # sibling loads only once that sibling is in memory globally. libcublas
+    # needs libcublasLt, and sorting by name puts them the wrong way round.
+    for _attempt in range(2):
+        unresolved: list[Path] = []
+        for library in libraries:
+            try:
+                ctypes.CDLL(str(library), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                unresolved.append(library)
+        if not unresolved:
+            return
+        libraries = unresolved
 
 
 def _import_faster_whisper() -> ModuleType:

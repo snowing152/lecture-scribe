@@ -1,14 +1,18 @@
 """Tests for the parts of transcribe.py that do not need a real model."""
 
+import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from lecture_scribe import transcribe as transcribe_module
 from lecture_scribe.transcribe import (
     Decoding,
     TranscriptionError,
     compute_type,
+    gpu_status,
     hub_cache_dir,
     model_status,
     transcribe,
@@ -69,6 +73,50 @@ def test_hub_cache_dir_prefers_the_most_specific_variable(
     assert hub_cache_dir() == Path("/exact")
 
 
+def _pretend_devices(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+    """Report a given number of CUDA devices, whatever this machine has."""
+    import ctranslate2
+
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: count)
+
+
+def test_a_machine_with_no_cuda_device_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pretend_devices(monkeypatch, 0)
+
+    status = gpu_status()
+
+    assert status.available is False
+    assert "no CUDA device" in status.detail
+
+
+def test_a_device_without_cublas_is_not_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The case worth catching in the doctor report: the driver shows a card,
+    # so everything looks fine until the decoder asks for the library twenty
+    # minutes into a lecture.
+    _pretend_devices(monkeypatch, 1)
+    monkeypatch.setattr(transcribe_module, "_cublas_available", lambda: False)
+
+    status = gpu_status()
+
+    assert status.available is False
+    assert status.device_count == 1
+    assert "cannot be loaded" in status.detail
+
+
+def test_a_device_with_cublas_is_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    _pretend_devices(monkeypatch, 1)
+    monkeypatch.setattr(transcribe_module, "_cublas_available", lambda: True)
+
+    status = gpu_status()
+
+    assert status.available is True
+    assert status.device_count == 1
+
+
 @dataclass(frozen=True, slots=True)
 class _FakeRawSegment:
     """Stand-in for the object faster_whisper yields per segment."""
@@ -97,6 +145,31 @@ class _FakeModel:
     ) -> tuple[list[_FakeRawSegment], _FakeInfo]:
         self.calls.append({"audio": audio, **kwargs})
         return self._segments, _FakeInfo(duration=self._duration)
+
+
+class _GeneratorModel:
+    """Stand-in whose segments arrive from a generator, as the real one's do.
+
+    Counting what was pulled from it is how a test can tell that recognition
+    really gave up rather than decoding the whole file and discarding the end.
+    """
+
+    def __init__(self, segments: list[_FakeRawSegment], duration: float) -> None:
+        self._segments = segments
+        self._duration = duration
+        self.yielded = 0
+
+    def transcribe(
+        self,
+        audio: str,  # noqa: ARG002
+        **kwargs: object,  # noqa: ARG002
+    ) -> tuple[Iterator[_FakeRawSegment], _FakeInfo]:
+        return self._pull(), _FakeInfo(duration=self._duration)
+
+    def _pull(self) -> Iterator[_FakeRawSegment]:
+        for segment in self._segments:
+            self.yielded += 1
+            yield segment
 
 
 class _BrokenModel:
@@ -213,3 +286,50 @@ def test_fraction_never_runs_past_the_end() -> None:
     )
 
     assert step.fraction == pytest.approx(1.0)
+
+
+def test_a_stop_ends_recognition_after_the_segment_in_hand(tmp_path: Path) -> None:
+    wav = tmp_path / "audio.wav"
+    wav.touch()
+    model = _GeneratorModel(
+        segments=[
+            _FakeRawSegment(index * 10.0, index * 10.0 + 9.0, f"line {index}", -0.2)
+            for index in range(5)
+        ],
+        duration=300.0,
+    )
+    stop = threading.Event()
+
+    def stop_after_two(decoding: Decoding) -> None:
+        if decoding.segments == 2:
+            stop.set()
+
+    result = transcribe(
+        model,
+        wav,
+        language="ko",
+        beam_size=5,
+        on_progress=stop_after_two,
+        stop=stop,
+    )
+
+    assert len(result.segments) == 2
+    # The remaining three were never pulled, which is the work being saved.
+    assert model.yielded == 2
+    assert result.interrupted is not None
+    # The second segment ends at 19 seconds, which is how far it got.
+    assert "0:19" in result.interrupted
+
+
+def test_recognition_that_runs_to_the_end_is_not_interrupted(tmp_path: Path) -> None:
+    wav = tmp_path / "audio.wav"
+    wav.touch()
+    model = _GeneratorModel(
+        segments=[_FakeRawSegment(0.0, 1.0, "only", -0.2)],
+        duration=1.0,
+    )
+
+    result = transcribe(model, wav, language="ko", beam_size=5, stop=threading.Event())
+
+    assert result.interrupted is None
+    assert model.yielded == 1

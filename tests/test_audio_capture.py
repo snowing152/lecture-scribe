@@ -99,10 +99,14 @@ class _FakeRecorder:
         blocks: int,
         stop: threading.Event,
         failure: Exception | None = None,
+        levels: list[float] | None = None,
     ) -> None:
         self._blocks = blocks
         self._stop = stop
         self._failure = failure
+        # One amplitude per block, the last one holding for whatever follows.
+        # Silence arriving part way through is the case worth playing back.
+        self._levels = levels
         self._served = 0
 
     def __enter__(self) -> "_FakeRecorder":
@@ -117,7 +121,10 @@ class _FakeRecorder:
         self._served += 1
         if self._failure is None and self._served >= self._blocks:
             self._stop.set()
-        return np.full((numframes, 2), 0.25, dtype=np.float32)
+        level = 0.25
+        if self._levels is not None:
+            level = self._levels[min(self._served - 1, len(self._levels) - 1)]
+        return np.full((numframes, 2), level, dtype=np.float32)
 
 
 class _FakeMicrophone:
@@ -143,6 +150,101 @@ def _record(
         audio_capture, "_loopback_microphone", lambda _device: microphone
     )
     return audio_capture.record_loopback(SPEAKER, target, sample_rate=16000, stop=stop)
+
+
+_BLOCK_SECONDS = BLOCK_FRAMES / 16000
+"""How much audio one faked block stands for, at the rate the tests record."""
+
+
+def _warnings_from(
+    target: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    levels: list[float],
+    blocks: int,
+) -> list[str]:
+    """Record the given per-block levels and collect the warnings raised.
+
+    The two silence windows are shortened to a couple of blocks each, so a
+    lecture going quiet can be played out in microseconds rather than in the
+    minutes the real windows cover.
+    """
+    monkeypatch.setattr(audio_capture, "_SILENCE_CHECK_SECONDS", 2 * _BLOCK_SECONDS)
+    monkeypatch.setattr(audio_capture, "_SILENCE_WINDOW_SECONDS", 4 * _BLOCK_SECONDS)
+
+    stop = threading.Event()
+    microphone = _FakeMicrophone(_FakeRecorder(blocks, stop, levels=levels))
+    monkeypatch.setattr(
+        audio_capture, "_loopback_microphone", lambda _device: microphone
+    )
+
+    warnings: list[str] = []
+
+    def collect(progress: audio_capture.Progress) -> None:
+        if progress.warning is not None:
+            warnings.append(progress.warning)
+
+    audio_capture.record_loopback(
+        SPEAKER,
+        target,
+        sample_rate=16000,
+        stop=stop,
+        silence_rms=0.01,
+        on_progress=collect,
+    )
+    return warnings
+
+
+def test_a_silent_start_is_reported_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _warnings_from(
+        tmp_path / "audio.wav", monkeypatch, levels=[0.0], blocks=6
+    )
+
+    assert len(warnings) == 1
+    assert "first" in warnings[0]
+    assert SPEAKER.name in warnings[0]
+
+
+def test_a_recording_that_goes_quiet_part_way_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two loud blocks pass the opening check, then the sound stops arriving --
+    # an output device that changed under a lecture already running.
+    warnings = _warnings_from(
+        tmp_path / "audio.wav",
+        monkeypatch,
+        levels=[0.5, 0.5] + [0.0] * 8,
+        blocks=10,
+    )
+
+    assert len(warnings) == 1
+    assert "for the last" in warnings[0]
+    assert SPEAKER.name in warnings[0]
+
+
+def test_the_sound_coming_back_re_arms_the_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _warnings_from(
+        tmp_path / "audio.wav",
+        monkeypatch,
+        levels=[0.5] * 2 + [0.0] * 4 + [0.5] * 4 + [0.0] * 4,
+        blocks=14,
+    )
+
+    assert len(warnings) == 2
+
+
+def test_a_recording_that_stays_loud_is_never_warned_about(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = _warnings_from(
+        tmp_path / "audio.wav", monkeypatch, levels=[0.5], blocks=12
+    )
+
+    assert warnings == []
 
 
 def test_a_recording_that_reaches_the_stop_event_is_not_interrupted(

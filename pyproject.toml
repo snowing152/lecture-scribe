@@ -14,6 +14,14 @@ dependencies = [
     "pyside6-essentials>=6.8",
 ]
 
+# Only cuBLAS: this CTranslate2 build dlopens libcublas.so.12 and nothing
+# else from CUDA, so the cuDNN wheel the faster-whisper docs name is not
+# needed here and would cost most of a gigabyte. The driver supplies
+# libcuda.so.1 itself. Left out of the default install because recording a
+# lecture needs none of it: `uv sync --extra cuda`.
+[project.optional-dependencies]
+cuda = ["nvidia-cublas-cu12>=12.1"]
+
 [project.scripts]
 scribe = "lecture_scribe.cli:main"
 

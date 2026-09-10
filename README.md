@@ -82,6 +82,24 @@ cp config.example.toml config.toml    # optional, the defaults work as they are
 uv run scribe doctor                  # first command to run on a new machine
 ```
 
+Decoding runs on the CPU unless you ask otherwise. If the machine has an NVIDIA
+card, the `cuda` extra adds the one CUDA library the decoder needs and
+`asr.gpu = true` switches to it — measured on an RTX 4060 Laptop, an 81 minute
+lecture went from 23 minutes to under four. The extra is about a gigabyte and
+nothing else needs it, so recording a lecture on a machine without a GPU stays
+a plain `uv sync`.
+
+The library has to be in **the environment scribe actually starts from**, and a
+checkout and a `uv tool install` are two different ones:
+
+```bash
+uv sync --extra cuda                          # for uv run scribe ...
+uv tool install --editable ".[cuda]" --force  # for the scribe on your PATH
+```
+
+`scribe doctor` prints which environment it is running in and whether cuBLAS
+loaded there, so it is worth running from wherever you actually start the tool.
+
 | | |
 |---|---|
 | `scribe doctor` | show devices, model and GPU; writes nothing |
@@ -119,13 +137,17 @@ recognised Korean streams into the pane a segment at a time, so you can start
 reading long before the file is finished.
 
 Recording and recognition each run on their own thread, so the meter keeps
-moving and the window keeps responding. Closing during recognition asks first,
-because a model run cannot be resumed part way through.
+moving and the window keeps responding. While a file is being recognised,
+**transcribe** turns into **stop**: recognition gives up at the end of the
+segment it is on and writes nothing, since half a lecture in `transcript.txt`
+would read like a whole one. Closing the window during recognition asks first,
+then does the same.
 
 **Opening it without a terminal:**
 
 ```bash
 uv tool install --editable . --force   # once, so scribe-gui is on the PATH
+                                       # add ".[cuda]" instead of "." to keep the GPU
 scribe launcher                        # from the directory holding config.toml
 ```
 
@@ -169,9 +191,15 @@ after the first few segments:
 ```
 
 If the first ten seconds are silent it says so and **keeps recording** — a
-false alarm should never cost a lecture. If the disk fills up or the device
-disappears part way through, the recording stops there and says why; the audio
-captured up to that point is kept, and can be transcribed as it is.
+false alarm should never cost a lecture. It keeps listening afterwards, too:
+if nothing is heard for a couple of minutes, because the sound moved to
+headphones or another output while the lecture ran, it says so again. If the
+disk fills up or the device disappears part way through, the recording stops
+there and says why; the audio captured up to that point is kept, and can be
+transcribed as it is.
+
+`Ctrl+C` during `scribe text` stops recognition at the end of the segment it is
+on and writes nothing; a second press gets out at once.
 
 Transcribe afterwards, on the same machine or a faster one, whenever
 convenient — recording and transcription never have to happen back to back:
@@ -219,6 +247,14 @@ The transcript reads like this:
 Paragraphs break on a pause, and `>>>` marks a moment flagged during the
 lecture — from the window's **mark** button, or `Ctrl+M`.
 
+A lecturer who runs sentences together leaves no pauses to break on, and an
+hour of that is one unreadable block. So a paragraph that has run past
+`output.paragraph_target` ends at the next sentence, and one that reaches no
+sentence ends at `output.paragraph_max` wherever it has got to — at the next
+segment boundary, which is the only place a paragraph can be cut. Past an hour
+every timecode is written `[0:12:30]` rather than `[12:30]`, so the text beside
+them keeps one left edge all the way down the file.
+
 ## Configuration
 
 `config.toml` next to where you run the tool, all of it optional:
@@ -229,11 +265,13 @@ lecture — from the window's **mark** button, or `Ctrl+M`.
 | `audio.sample_rate` | `16000` | capture rate in Hz |
 | `audio.silence_rms` | `0.001` | level below which a block counts as silence |
 | `asr.model` | `"large-v3"` | faster-whisper model |
-| `asr.gpu` | `false` | run on CUDA instead of the CPU |
+| `asr.gpu` | `false` | run on CUDA instead of the CPU; needs `uv sync --extra cuda` |
 | `asr.language` | `"ko"` | spoken language, never auto-detected |
 | `asr.beam_size` | `5` | decoder beam width |
 | `output.dir` | `"~/lectures"` | one folder per lecture lands here |
 | `output.paragraph_gap` | `1.2` | seconds of pause that start a paragraph |
+| `output.paragraph_target` | `90` | seconds after which a paragraph ends at the next sentence |
+| `output.paragraph_max` | `180` | seconds after which a paragraph ends at the next segment, sentence or not; `0` turns either off |
 
 A typo in a key is an error, not a silently ignored line.
 

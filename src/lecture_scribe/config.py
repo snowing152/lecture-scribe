@@ -63,10 +63,18 @@ class OutputConfig:
     Attributes:
         dir: Root directory holding one folder per lecture.
         paragraph_gap: Pause in seconds that starts a new paragraph.
+        paragraph_target: Length in seconds after which a paragraph is ended
+            at the next sentence, for a lecturer who leaves no pauses to
+            break on.
+        paragraph_max: Length in seconds after which a paragraph ends at
+            the next segment, sentence or not. Either of the two turns off
+            at zero.
     """
 
     dir: Path = field(default_factory=lambda: Path("~/lectures").expanduser())
     paragraph_gap: float = 1.2
+    paragraph_target: float = 90.0
+    paragraph_max: float = 180.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +192,10 @@ def _output(raw: Mapping[str, Any]) -> OutputConfig:
     return OutputConfig(
         dir=_path("output", raw, "dir", default.dir),
         paragraph_gap=_float("output", raw, "paragraph_gap", default.paragraph_gap),
+        paragraph_target=_float(
+            "output", raw, "paragraph_target", default.paragraph_target
+        ),
+        paragraph_max=_float("output", raw, "paragraph_max", default.paragraph_max),
     )
 
 

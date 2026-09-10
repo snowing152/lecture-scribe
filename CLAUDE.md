@@ -32,7 +32,10 @@ one core.
 - **Do not swap `soundcard` for `sounddevice`** — `WasapiSettings` has no
   loopback parameter, so it cannot do the job.
 - **Do not add dependencies** beyond `soundcard`, `soundfile`, `numpy`,
-  `faster-whisper` and `PySide6-Essentials` without asking first.
+  `faster-whisper` and `PySide6-Essentials` without asking first. The one
+  exception, agreed on 2026-09-10: `nvidia-cublas-cu12` as the optional
+  `cuda` extra, never a plain dependency -- recording a lecture needs none
+  of it and it costs a gigabyte.
 - No abstractions written for a future that has not arrived: no plugins, no
   factories, no base classes with a single implementation.
 - No blanket `try/except` to keep things from crashing. Catch named
@@ -73,6 +76,7 @@ prints it or draws it.
 
 ```bash
 uv sync                      # environment, managed Python 3.12
+uv sync --extra cuda         # ... plus cuBLAS, for asr.gpu = true
 uv run ruff format . && uv run ruff check .
 uv run mypy
 uv run pytest                # manual tests excluded
@@ -80,6 +84,8 @@ uv run pytest -m manual      # needs hardware or the model
 uv run scribe doctor         # what the tool can see on this machine
 uv run scribe gui            # the window; scribe-gui skips the console on Windows
 scribe launcher              # put the window in the application menu (--remove undoes)
+
+uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU included
 ```
 
 ## Non-obvious facts, verified on this machine
@@ -165,7 +171,45 @@ scribe launcher              # put the window in the application menu (--remove 
 - `condition_on_previous_text=False`. On a 90 minute file one error otherwise
   drags chained repetitions to the end.
 - `compute_type`: `int8_float16` on GPU, `int8` on CPU. Full float16 large-v3
-  wants about 10 GB of VRAM; this machine has 8 GB.
+  wants about 10 GB of VRAM; this machine has 8 GB. Measured: `int8_float16`
+  peaks at 3365 MiB on the 81 minute lecture, so the headroom is real.
+
+## Non-obvious facts about speed and the GPU, measured on this machine
+
+- **The decoder scans the whole file before yielding a segment.** 21 seconds
+  on the 81 minute lecture: `model.transcribe()` decodes the audio and runs
+  the VAD before it returns, and only then does iterating produce segments.
+  A stop event can therefore do nothing for the first half minute, which is
+  why the front ends say "reading the recording ..." rather than showing a
+  motionless progress line.
+- **Whisper emits segments back to back.** On ten minutes of the 컴넷
+  lecture, 92 of the 97 gaps between segments were zero or negative and the
+  largest was 2.0 seconds. Silero's `speech_pad_ms` of 400 shortens every
+  gap by up to 0.8 s on top of that. So `paragraph_gap` alone cannot break
+  up a lecturer who does not pause -- hence `paragraph_target`.
+- **Only 18% of segments end on sentence punctuation**, the same on CPU and
+  GPU. That is the supply `paragraph_target` has to work with, and why
+  `paragraph_max` exists as the fallback.
+- **A `QThread` destroyed while still running aborts the process** (exit
+  134, `QThread: Destroyed while thread is still running`). The window
+  therefore hides itself and quits from the worker's `finished` slot rather
+  than waiting on the GUI thread.
+- **`ctranslate2` 4.8.2 needs cuBLAS and nothing else.** Its shared object
+  names `libcublas.so.12` and carries no cuDNN reference at all, whatever
+  the faster-whisper documentation says. That halves what the `cuda` extra
+  has to install.
+- **The CUDA wheels are not on the loader's path.** They unpack into
+  `site-packages/nvidia/*/lib`, where a bare `dlopen` never looks, so
+  `transcribe._preload_cuda_libraries` loads them by full path first. Two
+  passes, because they carry no RUNPATH and `libcublas` needs `libcublasLt`.
+- **A checkout and a `uv tool install` are separate environments.** The
+  `scribe` on the PATH is the second one, and installing the extra into the
+  first changes nothing for the window. `scribe doctor` prints `sys.prefix`
+  for exactly this reason.
+- Measured on the RTX 4060 Laptop: 21x realtime, the 81 minute lecture in
+  3.9 minutes against 23 on the CPU. Same words -- 95.4% agreement by word
+  with the CPU transcript, the differences being spacing and dropped full
+  stops.
 
 ## Roadmap
 
