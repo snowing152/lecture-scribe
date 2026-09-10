@@ -75,6 +75,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         wavs: list[Path] = args.wav
         model: str | None = args.model
         return _text(merge_cli(config, model=model), wavs)
+    if command == "gui":
+        return _gui(config)
 
     step = _PENDING[command]
     print(f"`scribe {command}` arrives in step {step}.", file=sys.stderr)
@@ -102,10 +104,36 @@ def _build_parser() -> argparse.ArgumentParser:
     text.add_argument("wav", nargs="+", type=Path, help="WAV files to transcribe")
     text.add_argument("--model", help="override the configured ASR model")
 
+    commands.add_parser("gui", help="open the desktop window")
+
     find = commands.add_parser("find", help="full text search across all transcripts")
     find.add_argument("query", help="text to look for")
 
     return parser
+
+
+def _gui(config: Config) -> int:
+    """Open the desktop window.
+
+    Qt is imported here rather than at module level: it takes noticeably
+    longer to import than everything else the CLI touches, and `scribe rec`
+    should not pay for a window it never opens.
+
+    Args:
+        config: Effective configuration.
+
+    Returns:
+        The process exit code.
+    """
+    try:
+        from lecture_scribe.gui import run
+    except ImportError as error:
+        print(
+            f"error: PySide6 is not installed: {error}. Run 'uv sync'.",
+            file=sys.stderr,
+        )
+        return 1
+    return run(config)
 
 
 def _rec(config: Config, course: str, *, then_text: bool) -> int:

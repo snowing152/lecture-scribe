@@ -11,10 +11,15 @@ dependencies = [
     "soundfile>=0.13",
     "numpy>=2.0",
     "faster-whisper>=1.1",
+    "pyside6-essentials>=6.8",
 ]
 
 [project.scripts]
 scribe = "lecture_scribe.cli:main"
+
+# A gui-script gets no console window attached to it on Windows.
+[project.gui-scripts]
+scribe-gui = "lecture_scribe.gui:main"
 
 [build-system]
 requires = ["hatchling"]

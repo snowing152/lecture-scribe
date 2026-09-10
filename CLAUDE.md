@@ -2,7 +2,8 @@
 
 Personal tool for one user: it records a Korean lecture playing on this
 computer and turns it into a readable `.txt` transcript with timecodes.
-Everything runs locally. CLI only.
+Everything runs locally. A command line and a small desktop window over
+one core.
 
 ## Working agreement
 
@@ -18,14 +19,20 @@ Everything runs locally. CLI only.
 
 - **No real time.** Record the whole WAV first, recognise afterwards. Batch
   decoding is more accurate because the model sees whole sentences.
-- **No GUI, no speaker diarization, no translation, no summarisation, no cloud
-  ASR.** One voice, one language, one machine.
+- **No speaker diarization, no translation, no summarisation, no cloud ASR.**
+  One voice, one language, one machine.
+- **The window is a second front end, never the only one.** `cli.py` and
+  `gui.py` are peers: everything the window does stays reachable from the
+  command line, and neither holds logic the other needs.
+- **The window is monochrome.** Greys only, no accent colour; loudness reads
+  as brightness. Qt's Fusion style is forced on both platforms, since the
+  native styles are too far apart for one stylesheet.
 - **Audio files are never deleted or overwritten automatically.** A recording
   cannot be recreated; recognition can be repeated as often as wanted.
 - **Do not swap `soundcard` for `sounddevice`** — `WasapiSettings` has no
   loopback parameter, so it cannot do the job.
-- **Do not add dependencies** beyond `soundcard`, `soundfile`, `numpy` and
-  `faster-whisper` without asking first.
+- **Do not add dependencies** beyond `soundcard`, `soundfile`, `numpy`,
+  `faster-whisper` and `PySide6-Essentials` without asking first.
 - No abstractions written for a future that has not arrived: no plugins, no
   factories, no base classes with a single implementation.
 - No blanket `try/except` to keep things from crashing. Catch named
@@ -41,11 +48,13 @@ transcribe.py      WAV -> list[Segment], plus model and GPU readiness
 format_text.py     segments -> transcript text (pure)
 config.py          config.toml -> frozen dataclasses
 cli.py             argument parsing, printing and wiring, nothing else
+gui.py             the desktop window (Qt), wiring and drawing, nothing else
 archive.py         SQLite FTS5 index (step 5, not written yet)
 ```
 
-`format_text.py` never touches the disk. `cli.py` holds no logic of its own:
-each module reports about its own domain and the CLI prints.
+`format_text.py` never touches the disk. Neither `cli.py` nor `gui.py` holds
+logic of its own: each module reports about its own domain, and the front end
+prints it or draws it.
 
 ## Conventions
 
@@ -68,6 +77,7 @@ uv run mypy
 uv run pytest                # manual tests excluded
 uv run pytest -m manual      # needs hardware or the model
 uv run scribe doctor         # what the tool can see on this machine
+uv run scribe gui            # the window; scribe-gui skips the console on Windows
 ```
 
 ## Non-obvious facts, verified on this machine
@@ -92,6 +102,20 @@ uv run scribe doctor         # what the tool can see on this machine
   CLI, annoying when probing by hand; pass a dummy argument.
 - `config.toml` is read from the current directory only, and unknown keys are
   an error rather than a silent default.
+- **tkinter cannot be the GUI here, which is why Qt is a dependency.** The Tk
+  bundled with uv's managed CPython is built without Xft or fontconfig:
+  `libtcl9tk9.0.so` has no `Xft`/`Fc` symbols, `tkinter.font.families()`
+  returns only `fixed`, and `한국어 강의` measures 6 px, i.e. it does not
+  render. The system Python has no `tk` installed at all. Qt sees 846
+  families on the same machine and measures the same string at 59 px.
+- Qt stops drawing a combo box's native arrow as soon as `::drop-down` is
+  styled at all, and the CSS border-triangle trick renders as a rectangle.
+  `_Combo` paints the arrow itself.
+- Qt stylesheets have no `letter-spacing`; it only exists as
+  `QFont.setLetterSpacing`, hence `_track()`.
+- Frozen dataclasses cross `QThread` signal boundaries intact and arrive on
+  the GUI thread. `Progress`, `Recording` and `Transcription` are passed
+  whole rather than unpacked into primitives.
 
 ## Recognition settings that must not drift
 
@@ -111,5 +135,6 @@ uv run scribe doctor         # what the tool can see on this machine
 | 1 | `audio_capture.py`, `scribe rec` | done |
 | 2 | `transcribe.py`, `scribe text`, flat output | done |
 | 3 | `format_text.py`: paragraphs, `[MM:SS]` timecodes, `>>>` markers | done |
-| 4 | `--then-text`, important-moment hotkey, free space check | in progress — free space check (`scribe doctor`) and `>>>` mark rendering (`format_text.render_transcript`, `marks=`) done; `--then-text` flag parses but is stubbed; hotkey capture not started |
+| 4 | `--then-text`, important-moment hotkey, free space check | in progress — free space check (`scribe doctor`) and `>>>` mark rendering (`format_text.render_transcript`, `marks=`) done; marking exists in the window (button, Ctrl+M) but not in the CLI; `--then-text` flag parses but is stubbed |
+| G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |

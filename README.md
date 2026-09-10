@@ -11,6 +11,7 @@ speech model once.
    system audio  ──▶  audio.wav  ──▶   segments   ──▶  transcript.txt
      loopback          16 kHz          whisper
     scribe rec                       scribe text
+                     └──────── scribe gui ────────┘
 ```
 
 Recording and recognition are separate on purpose: a lecture can be captured
@@ -33,6 +34,7 @@ uv run scribe doctor                  # first command to run on a new machine
 | `scribe doctor` | show devices, model and GPU; writes nothing |
 | `scribe rec --course os` | record system audio until Ctrl+C |
 | `scribe text audio.wav` | transcribe one or more recordings, writing `transcript.txt` |
+| `scribe gui` | the same recording and transcribing in one window |
 | `scribe find "기말고사"` | search every transcript — *step 5* |
 
 Prefix them with `uv run`, or run `uv tool install --editable .` once to get a
@@ -45,6 +47,41 @@ without reinstalling. While recording, one line keeps updating:
 
 If the first ten seconds are silent it says so and **keeps recording** — a
 false alarm should never cost a lecture.
+
+## The window
+
+`scribe gui` opens the same tool as a window, for when a terminal is not
+where you want to be while a lecture runs. It is monochrome on purpose:
+greys only, and loudness reads as brightness rather than colour.
+
+```
+  LECTURE SCRIBE
+
+  COURSE   [ os                                        ]
+  DEVICE   [ Ryzen HD Audio Controller Speaker  ▾      ]
+
+                       0:12:34
+       ▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+                 -27.8 dBFS  ·  23.7 MB
+
+           [ stop ]   [ mark ]   [ transcribe ]
+  ──────────────────────────────────────────────────────
+  marked [12:30] (2 in this lecture)
+
+  [00:47] 먼저 문맥 교환이 무엇인지 봅시다. …
+```
+
+Type a course name, press **record**, and press **mark** (or `Ctrl+M`) at a
+moment worth finding again — those become the `>>>` paragraphs. **stop**
+closes the WAV, **transcribe** runs the model and shows the transcript in
+the pane; it is written to `transcript.txt` either way.
+
+Recording and recognition each run on their own thread, so the meter keeps
+moving and the window keeps responding. Closing during recognition asks
+first, because a model run cannot be resumed part way through.
+
+On Windows there is a second launcher, `scribe-gui`, which opens the window
+with no console behind it.
 
 ## Typical workflow
 
@@ -76,9 +113,9 @@ scribe text ~/lectures/*/audio.wav
 scribe text --model large-v3 audio.wav      # override without touching config.toml
 ```
 
-`rec --then-text` and the important-moment hotkey would collapse the last
-two steps into one, but neither is wired up yet — recording and
-transcription are always two separate commands for now (see the roadmap in
+`scribe gui` does both halves in one window, marks included. On the command
+line they stay two separate commands: `rec --then-text` and the
+important-moment hotkey are not wired up yet (see the roadmap in
 `CLAUDE.md`).
 
 ## What you get
@@ -104,7 +141,7 @@ The transcript reads like this:
 ```
 
 Paragraphs break on a pause, and `>>>` marks a moment flagged during the
-lecture.
+lecture — from the window's **mark** button, or `Ctrl+M`.
 
 ## Configuration
 
