@@ -6,7 +6,8 @@ Everything runs locally. CLI only.
 
 ## Working agreement
 
-- The user writes in Russian — answer in Russian.
+- Answer in whatever language the user's message is written in (so far:
+  Russian, sometimes English).
 - **Code, identifiers, docstrings, comments and console output are in English.**
 - Work proceeds step by step. Finish a step, say what to verify by hand, then
   **stop and wait for confirmation**. Never start the next step unasked.
@@ -109,7 +110,7 @@ uv run scribe doctor         # what the tool can see on this machine
 |---|---|---|
 | 0 | skeleton, config, `scribe doctor` | done |
 | 1 | `audio_capture.py`, `scribe rec` | done |
-| 2 | `transcribe.py`, `scribe text`, flat output | next |
-| 3 | `format_text.py`, `glossary.py`, paragraphs, markers, `.srt`, `.json` | |
+| 2 | `transcribe.py`, `scribe text`, flat output | done |
+| 3 | `format_text.py`, `glossary.py`, paragraphs, markers, `.srt`, `.json` | next |
 | 4 | `--then-text`, important-moment hotkey, free space check | |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |

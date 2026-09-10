@@ -1,16 +1,24 @@
 """Speech recognition of a recorded WAV file.
 
-Step 0 covers readiness reporting only, which is what ``scribe doctor`` needs:
-whether the model weights are already on disk and whether a CUDA device is
-visible. Neither check touches the network. Decoding lands here in step 2.
+Loading the model and running it on one file are kept apart: `scribe text`
+loads a model once and reuses it for every WAV given on the command line,
+since loading alone can take longer than transcribing a short recording.
 """
 
 import os
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
+from typing import Any, cast
 
 # Standard faster-whisper model names live under this Hugging Face account.
 _REPO_DIR_TEMPLATE = "models--Systran--faster-whisper-{name}"
+
+
+class TranscriptionError(Exception):
+    """Raised when the model cannot be loaded or a file cannot be decoded."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +49,41 @@ class GpuStatus:
     available: bool
     device_count: int
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class Segment:
+    """One recognised utterance.
+
+    Attributes:
+        start: Start time in seconds from the beginning of the recording.
+        end: End time in seconds.
+        text: Recognised text, whitespace-trimmed.
+        avg_logprob: Mean log probability the decoder assigned to this
+            segment; less negative is more confident.
+    """
+
+    start: float
+    end: float
+    text: str
+    avg_logprob: float
+
+
+@dataclass(frozen=True, slots=True)
+class Transcription:
+    """Result of transcribing one WAV file.
+
+    Attributes:
+        segments: Recognised speech, materialized in full so that a decoding
+            error surfaces here rather than while some later module iterates
+            a generator.
+        audio_duration: Length of the source audio in seconds.
+        decode_seconds: Wall-clock time the decoder took.
+    """
+
+    segments: list[Segment]
+    audio_duration: float
+    decode_seconds: float
 
 
 def compute_type(gpu: bool) -> str:
@@ -104,6 +147,11 @@ def model_status(name: str) -> ModelStatus:
 def gpu_status() -> GpuStatus:
     """Report whether CTranslate2 can see a CUDA device.
 
+    This only asks the CUDA driver how many devices exist; it does not load
+    cuBLAS or cuDNN, so a missing runtime library is not caught here. That
+    failure surfaces instead as a :class:`TranscriptionError` from
+    :func:`load_model`, the first place a model actually runs a forward pass.
+
     Returns:
         The device count plus a line explaining it, including the reason when
         no device is usable.
@@ -128,3 +176,110 @@ def gpu_status() -> GpuStatus:
         f"{count} CUDA device(s) visible "
         "(cuBLAS and cuDNN are loaded only when asr.gpu = true)",
     )
+
+
+def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped library)
+    """Load an ASR model, downloading it on first use.
+
+    Args:
+        model: faster-whisper model name or a path to a local model directory.
+        gpu: Whether to run on CUDA instead of the CPU.
+
+    Returns:
+        A ``faster_whisper.WhisperModel`` ready to transcribe.
+
+    Raises:
+        TranscriptionError: The weights could not be read or downloaded, or
+            the requested device or compute type is not supported. A missing
+            CUDA runtime library is reported only once transcription is
+            attempted, since loading the model does not exercise it.
+    """
+    faster_whisper = _import_faster_whisper()
+    device = "cuda" if gpu else "cpu"
+    try:
+        return faster_whisper.WhisperModel(
+            model, device=device, compute_type=compute_type(gpu)
+        )
+    except (OSError, ValueError, RuntimeError) as error:
+        raise TranscriptionError(f"cannot load model '{model}': {error}") from error
+
+
+def transcribe(
+    model: Any,  # noqa: ANN401 (untyped library)
+    wav: Path,
+    *,
+    language: str,
+    beam_size: int,
+    initial_prompt: str | None = None,
+) -> Transcription:
+    """Recognise the speech in one WAV file.
+
+    Language is fixed rather than auto-detected: on the first seconds of a
+    recording, auto-detection confuses Korean with Japanese, and the mistake
+    then applies to the whole file. VAD trims silence before it reaches the
+    model, which both speeds up decoding and avoids the hallucinated text
+    Whisper produces on pure silence. Context from previous segments is
+    switched off on purpose: on a 90 minute recording, one wrong segment would
+    otherwise keep dragging the same error into every segment after it.
+
+    Args:
+        model: A model from :func:`load_model`.
+        wav: Recording to transcribe.
+        language: Spoken language, as a Whisper language code.
+        beam_size: Beam search width.
+        initial_prompt: Text that biases the decoder, typically glossary
+            terms for the course.
+
+    Returns:
+        The recognised segments plus timing.
+
+    Raises:
+        TranscriptionError: The file could not be decoded, or GPU decoding
+            was requested but the CUDA runtime libraries are not installed.
+    """
+    start = time.monotonic()
+    try:
+        raw_segments, info = model.transcribe(
+            str(wav),
+            language=language,
+            beam_size=beam_size,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+            condition_on_previous_text=False,
+            initial_prompt=initial_prompt,
+        )
+        segments = [
+            Segment(
+                start=raw.start,
+                end=raw.end,
+                text=raw.text.strip(),
+                avg_logprob=raw.avg_logprob,
+            )
+            for raw in cast(Iterator[Any], raw_segments)
+        ]
+    except (OSError, RuntimeError) as error:
+        raise TranscriptionError(f"cannot transcribe {wav}: {error}") from error
+
+    return Transcription(
+        segments=segments,
+        audio_duration=float(info.duration),
+        decode_seconds=time.monotonic() - start,
+    )
+
+
+def _import_faster_whisper() -> ModuleType:
+    """Import faster_whisper, turning a broken install into a clear error.
+
+    Returns:
+        The faster_whisper module.
+
+    Raises:
+        TranscriptionError: The package is missing.
+    """
+    try:
+        import faster_whisper
+    except ImportError as error:
+        raise TranscriptionError(
+            f"faster-whisper is not installed: {error}. Run 'uv sync'."
+        ) from error
+    return cast(ModuleType, faster_whisper)

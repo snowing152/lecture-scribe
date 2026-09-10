@@ -1,6 +1,7 @@
 """Command line entry point: argument parsing and wiring, nothing else."""
 
 import argparse
+import json
 import math
 import platform
 import shutil
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
@@ -29,10 +31,17 @@ from lecture_scribe.config import (
     load_config,
     merge_cli,
 )
-from lecture_scribe.transcribe import compute_type, gpu_status, model_status
+from lecture_scribe.transcribe import (
+    TranscriptionError,
+    compute_type,
+    gpu_status,
+    load_model,
+    model_status,
+    transcribe,
+)
 
 # Commands whose arguments are already fixed but whose behaviour arrives later.
-_PENDING = {"text": 2, "find": 5}
+_PENDING = {"find": 5}
 
 _LABEL_WIDTH = 14
 
@@ -63,6 +72,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         course: str = args.course
         then_text: bool = args.then_text
         return _rec(merge_cli(config, device=device), course, then_text=then_text)
+    if command == "text":
+        wavs: list[Path] = args.wav
+        model: str | None = args.model
+        text_course: str | None = args.course
+        return _text(merge_cli(config, model=model), wavs, course=text_course)
 
     step = _PENDING[command]
     print(f"`scribe {command}` arrives in step {step}.", file=sys.stderr)
@@ -158,6 +172,98 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
             f"check that the lecture was playing through '{device.name}'."
         )
     return 0
+
+
+def _text(config: Config, wavs: list[Path], *, course: str | None) -> int:
+    """Transcribe one or more recordings, writing a plain .txt and .json.
+
+    Paths are checked before the model is loaded: large-v3 can take a while
+    to load or download, and a typo in a filename should fail in an instant
+    rather than after that wait -- doubly so since a model already loading in
+    another process blocks a second load on the same cache until it finishes.
+
+    The model is loaded once and reused for every valid file: loading alone
+    can take longer than transcribing a short recording, and a lecture
+    archive may hold many files.
+
+    Output is deliberately unformatted for now -- paragraphs, timecodes in
+    the text, low-confidence markers and the .srt file are format_text.py's
+    job, in step 3. One bad file is reported and skipped rather than aborting
+    the rest of the batch; a missing model affects every file identically and
+    aborts immediately instead.
+
+    Args:
+        config: Effective configuration, command line overrides applied.
+        wavs: Recordings to transcribe.
+        course: Value of --course; glossary bias is not wired up yet.
+
+    Returns:
+        The process exit code: 0 if every file transcribed, 1 if any failed.
+    """
+    if course is not None:
+        print(
+            f"note: --course glossary bias is not wired up yet, it arrives "
+            f"in step 3; transcribing '{course}' without it\n"
+        )
+
+    failures = 0
+    existing = []
+    for wav in wavs:
+        if wav.is_file():
+            existing.append(wav)
+        else:
+            print(f"error: {wav} does not exist", file=sys.stderr)
+            failures += 1
+    if not existing:
+        return 1
+
+    print(f"loading {config.asr.model} ({compute_type(config.asr.gpu)}) ...")
+    try:
+        model = load_model(config.asr.model, gpu=config.asr.gpu)
+    except TranscriptionError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    for wav in existing:
+        print(f"\n{wav}")
+        try:
+            result = transcribe(
+                model,
+                wav,
+                language=config.asr.language,
+                beam_size=config.asr.beam_size,
+            )
+        except TranscriptionError as error:
+            print(f"  error: {error}", file=sys.stderr)
+            failures += 1
+            continue
+
+        text_path = wav.parent / "transcript.txt"
+        json_path = wav.parent / "segments.json"
+        text_path.write_text(
+            "\n".join(segment.text for segment in result.segments), encoding="utf-8"
+        )
+        json_path.write_text(
+            json.dumps(
+                [asdict(s) for s in result.segments], ensure_ascii=False, indent=2
+            ),
+            encoding="utf-8",
+        )
+
+        ratio = (
+            result.decode_seconds / result.audio_duration
+            if result.audio_duration > 0
+            else 0.0
+        )
+        _row("segments", str(len(result.segments)))
+        _row("audio", _hms(result.audio_duration))
+        _row(
+            "decoding",
+            f"{_hms(result.decode_seconds)} ({ratio:.2f}x audio length)",
+        )
+        _row("wrote", f"{text_path.name}, {json_path.name}")
+
+    return 1 if failures else 0
 
 
 def _install_stop_handler(stop: threading.Event) -> None:

@@ -32,7 +32,7 @@ uv run scribe doctor                  # first command to run on a new machine
 |---|---|
 | `scribe doctor` | show devices, model and GPU; writes nothing |
 | `scribe rec --course os` | record system audio until Ctrl+C |
-| `scribe text audio.wav` | transcribe one or more recordings — *step 2* |
+| `scribe text audio.wav` | transcribe one or more recordings, writing `transcript.txt` and `segments.json` |
 | `scribe find "기말고사"` | search every transcript — *step 5* |
 
 Prefix them with `uv run`. While recording, one line keeps updating:
