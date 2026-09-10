@@ -109,6 +109,10 @@ moment worth finding again — those become the `>>>` paragraphs. **stop** close
 the WAV, **transcribe** runs the model and shows the transcript in the pane; it
 is written to `transcript.txt` either way.
 
+While recognition runs, the level meter becomes a progress bar and the
+recognised Korean streams into the pane a segment at a time, so you can start
+reading long before the file is finished.
+
 Recording and recognition each run on their own thread, so the meter keeps
 moving and the window keeps responding. Closing during recognition asks first,
 because a model run cannot be resumed part way through.
@@ -150,6 +154,13 @@ While recording, one line keeps updating:
 
 ```
   0:12:34    -27.8 dBFS  [######------]    23.7 MB
+```
+
+Recognition shows the same kind of line, with an estimate that settles down
+after the first few segments:
+
+```
+   42%  [#####-------]  0:01:15 of 0:03:00    2.9x  0:00:36 left
 ```
 
 If the first ten seconds are silent it says so and **keeps recording** — a

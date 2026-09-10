@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from lecture_scribe.transcribe import (
+    Decoding,
     TranscriptionError,
     compute_type,
     hub_cache_dir,
@@ -156,3 +157,59 @@ def test_empty_recording_yields_no_segments(tmp_path: Path) -> None:
 
     assert result.segments == []
     assert result.audio_duration == pytest.approx(0.0)
+
+
+def test_progress_is_reported_once_per_segment(tmp_path: Path) -> None:
+    wav = tmp_path / "audio.wav"
+    wav.touch()
+    model = _FakeModel(
+        segments=[
+            _FakeRawSegment(0.0, 12.0, "하나", -0.2),
+            _FakeRawSegment(12.5, 40.0, "둘", -0.2),
+            _FakeRawSegment(41.0, 90.0, "셋", -0.2),
+        ],
+        duration=90.0,
+    )
+    seen: list[Decoding] = []
+
+    transcribe(model, wav, language="ko", beam_size=5, on_progress=seen.append)
+
+    assert [step.segments for step in seen] == [1, 2, 3]
+    assert [step.position for step in seen] == [12.0, 40.0, 90.0]
+    assert [step.text for step in seen] == ["하나", "둘", "셋"]
+    # The length is known before the first segment, which is the whole point.
+    assert {step.audio_duration for step in seen} == {90.0}
+    assert seen[-1].fraction == pytest.approx(1.0)
+
+
+def test_progress_is_optional(tmp_path: Path) -> None:
+    wav = tmp_path / "audio.wav"
+    wav.touch()
+    model = _FakeModel(segments=[_FakeRawSegment(0.0, 1.0, "네", -0.2)], duration=1.0)
+
+    assert len(transcribe(model, wav, language="ko", beam_size=5).segments) == 1
+
+
+def test_fraction_is_the_share_of_the_recording_done() -> None:
+    step = Decoding(
+        position=30.0, audio_duration=120.0, elapsed=7.0, segments=4, text="x"
+    )
+
+    assert step.fraction == pytest.approx(0.25)
+
+
+def test_fraction_of_a_recording_with_no_length_is_finished() -> None:
+    # An empty file would otherwise divide by zero on the first segment.
+    step = Decoding(position=0.0, audio_duration=0.0, elapsed=0.1, segments=1, text="x")
+
+    assert step.fraction == pytest.approx(1.0)
+
+
+def test_fraction_never_runs_past_the_end() -> None:
+    # VAD restores timestamps, and a segment can end a shade past the
+    # duration the decoder reported.
+    step = Decoding(
+        position=91.0, audio_duration=90.0, elapsed=20.0, segments=9, text="x"
+    )
+
+    assert step.fraction == pytest.approx(1.0)

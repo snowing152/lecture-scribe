@@ -121,6 +121,14 @@ scribe launcher              # put the window in the application menu (--remove 
 - Frozen dataclasses cross `QThread` signal boundaries intact and arrive on
   the GUI thread. `Progress`, `Recording` and `Transcription` are passed
   whole rather than unpacked into primitives.
+- **`model.transcribe()` hands back its info object before it decodes a
+  single segment**, so the length of the audio is known up front and real
+  progress can be shown rather than a spinner. The segments themselves are a
+  generator: iterating it is what does the decoding.
+- VAD restores segment timestamps to positions in the original audio, so a
+  segment's end is a true position in the lecture and can be compared with
+  `info.duration`. It can land a shade past it, hence the clamp in
+  `Decoding.fraction`.
 - A recording that dies part way through returns rather than raises: leaving
   the `with` closes the WAV, so the audio already captured stays valid, and
   `Recording.interrupted` carries the reason. Only a recording that never

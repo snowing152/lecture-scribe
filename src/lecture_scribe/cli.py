@@ -34,6 +34,7 @@ from lecture_scribe.launcher import LauncherError
 from lecture_scribe.launcher import install as install_launcher
 from lecture_scribe.launcher import remove as remove_launcher
 from lecture_scribe.transcribe import (
+    Decoding,
     TranscriptionError,
     compute_type,
     gpu_status,
@@ -234,6 +235,13 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
     stop = threading.Event()
     _install_stop_handler(stop)
     status = _StatusLine()
+
+    def show(progress: Progress) -> None:
+        """Draw the recording line, and any warning that arrived with it."""
+        if progress.warning is not None:
+            status.say(f"warning: {progress.warning}")
+        status.draw(_recording_line(progress))
+
     try:
         recording = record_loopback(
             device,
@@ -241,7 +249,7 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
             sample_rate=config.audio.sample_rate,
             stop=stop,
             silence_rms=config.audio.silence_rms,
-            on_progress=status.update,
+            on_progress=show,
         )
     except AudioDeviceError as error:
         status.clear()
@@ -304,6 +312,7 @@ def _text(config: Config, wavs: list[Path]) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+    status = _StatusLine()
     for wav in existing:
         print(f"\n{wav}")
         try:
@@ -312,11 +321,14 @@ def _text(config: Config, wavs: list[Path]) -> int:
                 wav,
                 language=config.asr.language,
                 beam_size=config.asr.beam_size,
+                on_progress=lambda decoding: status.draw(_decoding_line(decoding)),
             )
         except TranscriptionError as error:
+            status.clear()
             print(f"  error: {error}", file=sys.stderr)
             failures += 1
             continue
+        status.clear()
 
         text_path = wav.parent / "transcript.txt"
         text_path.write_text(
@@ -366,7 +378,7 @@ def _install_stop_handler(stop: threading.Event) -> None:
 
 
 class _StatusLine:
-    """The one line of live progress redrawn while recording.
+    """The one line of live progress redrawn while a command works.
 
     Nothing is drawn when output is not a terminal, so a log file does not
     fill up with carriage returns.
@@ -380,27 +392,28 @@ class _StatusLine:
         self._width = 0
         self._next_draw = 0.0
 
-    def update(self, progress: Progress) -> None:
-        """Show the current state, and any warning that came with it.
+    def draw(self, line: str) -> None:
+        """Redraw the line, no more often than the refresh interval.
 
         Args:
-            progress: State reported by the recording loop.
+            line: The text to show, already formatted.
         """
-        if progress.warning is not None:
-            self.clear()
-            print(f"warning: {progress.warning}")
-
         now = time.monotonic()
         if not self._enabled or now < self._next_draw:
             return
         self._next_draw = now + self._INTERVAL_SECONDS
 
-        line = (
-            f"  {_hms(progress.elapsed)}   {_dbfs(progress.rms):>11}  "
-            f"{_meter(progress.rms)}  {progress.bytes_written / 1_000_000:6.1f} MB"
-        )
         self._width = len(line)
         print(f"\r{line}", end="", flush=True)
+
+    def say(self, message: str) -> None:
+        """Print a message on a row of its own, leaving the line tidy.
+
+        Args:
+            message: The text to print.
+        """
+        self.clear()
+        print(message)
 
     def clear(self) -> None:
         """Wipe the status line so later output starts on a clean row."""
@@ -422,13 +435,42 @@ def _dbfs(level: float) -> str:
     return f"{20 * math.log10(level):.1f} dBFS"
 
 
+def _bar(fraction: float, width: int = 12) -> str:
+    """Draw a coarse bar for a fraction from 0.0 to 1.0."""
+    filled = round(width * max(0.0, min(1.0, fraction)))
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
 def _meter(level: float, width: int = 12) -> str:
     """Draw a coarse level bar, from -60 dBFS to clipping."""
-    filled = 0
+    loudness = 0.0
     if level > 0.0:
         loudness = (20 * math.log10(level) + 60) / 60
-        filled = round(width * max(0.0, min(1.0, loudness)))
-    return "[" + "#" * filled + "-" * (width - filled) + "]"
+    return _bar(loudness, width)
+
+
+def _recording_line(progress: Progress) -> str:
+    """Format the live line shown while recording."""
+    return (
+        f"  {_hms(progress.elapsed)}   {_dbfs(progress.rms):>11}  "
+        f"{_meter(progress.rms)}  {progress.bytes_written / 1_000_000:6.1f} MB"
+    )
+
+
+def _decoding_line(decoding: Decoding) -> str:
+    """Format the live line shown while recognising.
+
+    The estimate assumes the rest of the file decodes at the rate the part
+    already done did, which is close enough on one lecture recorded in one
+    sitting.
+    """
+    done = decoding.fraction
+    speed = decoding.position / decoding.elapsed if decoding.elapsed > 0 else 0.0
+    left = decoding.elapsed / done - decoding.elapsed if done > 0 else 0.0
+    return (
+        f"  {done * 100:3.0f}%  {_bar(done)}  {_hms(decoding.position)} of "
+        f"{_hms(decoding.audio_duration)}  {speed:5.1f}x  {_hms(left)} left"
+    )
 
 
 def _doctor(config: Config) -> int:

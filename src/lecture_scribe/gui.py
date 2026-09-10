@@ -56,6 +56,7 @@ from lecture_scribe.config import Config, ConfigError, load_config
 from lecture_scribe.format_text import format_timecode, render_transcript
 from lecture_scribe.launcher import DESKTOP_ID
 from lecture_scribe.transcribe import (
+    Decoding,
     Transcription,
     TranscriptionError,
     compute_type,
@@ -223,6 +224,7 @@ class _TranscribeWorker(QThread):
     """Loads the model and transcribes one recording off the GUI thread."""
 
     staged = Signal(str)
+    progressed = Signal(Decoding)
     transcribed = Signal(Path, str, Transcription)
     failed = Signal(str)
 
@@ -256,6 +258,7 @@ class _TranscribeWorker(QThread):
                 self._wav,
                 language=asr.language,
                 beam_size=asr.beam_size,
+                on_progress=self.progressed.emit,
             )
         except TranscriptionError as error:
             self.failed.emit(str(error))
@@ -339,6 +342,20 @@ class _LevelMeter(QWidget):
         # The peak marker sinks slowly rather than following every block, so a
         # brief loud passage stays on screen long enough to be seen.
         self._peak = max(self._level, self._peak - self._PEAK_FALL)
+        self.update()
+
+    def set_fraction(self, fraction: float) -> None:
+        """Fill the bar to a share of its width, with no peak marker.
+
+        The same widget serves as the progress bar while recognition runs.
+        It is already a bar that fills from the left, and a second one would
+        be furniture for no gain.
+
+        Args:
+            fraction: How full to draw it, from 0.0 to 1.0.
+        """
+        self._level = max(0.0, min(1.0, fraction))
+        self._peak = 0.0
         self.update()
 
     def reset(self) -> None:
@@ -629,8 +646,10 @@ class _Window(QWidget):
         """Hand the recording just made to a worker for recognition."""
         if self._wav is None:
             return
+        self._transcript.clear()
         worker = _TranscribeWorker(self._config, self._wav, list(self._marks))
         worker.staged.connect(self._say)
+        worker.progressed.connect(self._on_decoding)
         worker.transcribed.connect(self._on_transcribed)
         worker.failed.connect(self._on_transcribe_failed)
         worker.finished.connect(self._release_transcriber)
@@ -640,9 +659,35 @@ class _Window(QWidget):
         self._refresh()
         worker.start()
 
+    def _on_decoding(self, decoding: Decoding) -> None:
+        """Show how far recognition has got, and the text as it arrives.
+
+        Reading can start immediately instead of after a wait that runs into
+        double digit minutes on a full lecture. What the pane shows here is
+        replaced by the finished transcript once the last segment is in.
+        """
+        self._clock.setText(_clock(decoding.position))
+        self._meter.set_fraction(decoding.fraction)
+        left = (
+            decoding.elapsed / decoding.fraction - decoding.elapsed
+            if decoding.fraction > 0.0
+            else 0.0
+        )
+        self._levels.setText(
+            f"{decoding.fraction * 100:.0f}%   ·   "
+            f"{_plural(decoding.segments, 'segment')}   ·   {_clock(left)} left"
+        )
+        # The end of the segment rather than its start: near enough for a
+        # preview the finished render is about to replace.
+        self._transcript.appendPlainText(
+            f"{format_timecode(decoding.position)} {decoding.text}"
+        )
+
     def _on_transcribed(self, path: Path, text: str, result: Transcription) -> None:
         """Show the finished transcript and how long decoding took."""
         self._transcribing = False
+        self._meter.reset()
+        self._clock.setText(_clock(result.audio_duration))
         self._transcript.setPlainText(text)
         ratio = (
             result.decode_seconds / result.audio_duration
@@ -650,7 +695,7 @@ class _Window(QWidget):
             else 0.0
         )
         self._say(
-            f"wrote {path} · {len(result.segments)} segments · "
+            f"wrote {path} · {_plural(len(result.segments), 'segment')} · "
             f"{_clock(result.decode_seconds)} ({ratio:.2f}x audio length)"
         )
         self._refresh()
@@ -803,6 +848,22 @@ def _track(label: QLabel, spacing: float) -> None:
     font = label.font()
     font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
     label.setFont(font)
+
+
+def _plural(count: int, noun: str) -> str:
+    """Count a noun, keeping it singular when there is only one of it.
+
+    The first progress report of every transcription carries exactly one
+    segment, so "1 segments" would be on screen every single time.
+
+    Args:
+        count: How many there are.
+        noun: The singular noun, pluralised by adding an s.
+
+    Returns:
+        The count and the noun together.
+    """
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
 def _clock(seconds: float) -> str:

@@ -7,7 +7,7 @@ since loading alone can take longer than transcribing a short recording.
 
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -67,6 +67,42 @@ class Segment:
     end: float
     text: str
     avg_logprob: float
+
+
+@dataclass(frozen=True, slots=True)
+class Decoding:
+    """How far recognition has got through one recording.
+
+    The decoder yields segments as it finishes them, so this is reported
+    once per segment rather than on a timer.
+
+    Attributes:
+        position: End of the last segment recognised, in seconds from the
+            start of the recording. Silence skipped by the VAD is already
+            accounted for, so this is a real position in the audio.
+        audio_duration: Length of the whole recording in seconds.
+        elapsed: Wall-clock seconds spent decoding so far.
+        segments: How many segments have been recognised.
+        text: Text of the segment just recognised.
+    """
+
+    position: float
+    audio_duration: float
+    elapsed: float
+    segments: int
+    text: str
+
+    @property
+    def fraction(self) -> float:
+        """How much of the recording is done, from 0.0 to 1.0.
+
+        Returns:
+            The share of the audio recognised so far. A recording of no
+            length counts as finished rather than dividing by zero.
+        """
+        if self.audio_duration <= 0.0:
+            return 1.0
+        return max(0.0, min(1.0, self.position / self.audio_duration))
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +246,7 @@ def transcribe(
     *,
     language: str,
     beam_size: int,
+    on_progress: Callable[[Decoding], None] | None = None,
 ) -> Transcription:
     """Recognise the speech in one WAV file.
 
@@ -226,6 +263,9 @@ def transcribe(
         wav: Recording to transcribe.
         language: Spoken language, as a Whisper language code.
         beam_size: Beam search width.
+        on_progress: Called with each segment as the decoder finishes it.
+            The total length is known before the first one arrives, so a
+            caller can show real progress rather than a spinner.
 
     Returns:
         The recognised segments plus timing.
@@ -235,6 +275,7 @@ def transcribe(
             was requested but the CUDA runtime libraries are not installed.
     """
     start = time.monotonic()
+    segments: list[Segment] = []
     try:
         raw_segments, info = model.transcribe(
             str(wav),
@@ -244,21 +285,33 @@ def transcribe(
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
         )
-        segments = [
-            Segment(
+        # The length is known before any segment is decoded, which is what
+        # makes progress reportable at all.
+        audio_duration = float(info.duration)
+        for raw in cast(Iterator[Any], raw_segments):
+            segment = Segment(
                 start=raw.start,
                 end=raw.end,
                 text=raw.text.strip(),
                 avg_logprob=raw.avg_logprob,
             )
-            for raw in cast(Iterator[Any], raw_segments)
-        ]
+            segments.append(segment)
+            if on_progress is not None:
+                on_progress(
+                    Decoding(
+                        position=segment.end,
+                        audio_duration=audio_duration,
+                        elapsed=time.monotonic() - start,
+                        segments=len(segments),
+                        text=segment.text,
+                    )
+                )
     except (OSError, RuntimeError) as error:
         raise TranscriptionError(f"cannot transcribe {wav}: {error}") from error
 
     return Transcription(
         segments=segments,
-        audio_duration=float(info.duration),
+        audio_duration=audio_duration,
         decode_seconds=time.monotonic() - start,
     )
 
