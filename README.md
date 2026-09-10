@@ -109,6 +109,11 @@ moment worth finding again — those become the `>>>` paragraphs. **stop** close
 the WAV, **transcribe** runs the model and shows the transcript in the pane; it
 is written to `transcript.txt` either way.
 
+**open** (or `Ctrl+O`) picks a recording made earlier instead — one from a
+previous session, or a WAV that never came from `scribe rec` at all. If a
+`transcript.txt` is already sitting beside it, the window shows that rather
+than decoding it again; pressing **transcribe** replaces it.
+
 While recognition runs, the level meter becomes a progress bar and the
 recognised Korean streams into the pane a segment at a time, so you can start
 reading long before the file is finished.
