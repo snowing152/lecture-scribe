@@ -16,6 +16,7 @@ from lecture_scribe.audio_capture import (
     LoopbackDevice,
     Recording,
     course_slug,
+    inspect_recording,
     lecture_dir,
     resolve_device,
 )
@@ -202,3 +203,27 @@ def test_a_file_that_cannot_be_created_is_an_error(
 ) -> None:
     with pytest.raises(AudioDeviceError, match="cannot record to"):
         _record(tmp_path / "missing" / "audio.wav", monkeypatch, blocks=3)
+
+
+def test_an_existing_recording_reports_its_length_and_size(tmp_path: Path) -> None:
+    wav = tmp_path / "audio.wav"
+    sf.write(wav, np.zeros(16000 * 3, dtype=np.int16), 16000, subtype="PCM_16")
+
+    existing = inspect_recording(wav)
+
+    assert existing.path == wav
+    assert existing.duration == pytest.approx(3.0)
+    assert existing.size_bytes == wav.stat().st_size
+
+
+def test_a_recording_that_is_not_there_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(AudioDeviceError, match="cannot read"):
+        inspect_recording(tmp_path / "gone.wav")
+
+
+def test_a_file_that_is_not_audio_is_refused(tmp_path: Path) -> None:
+    not_audio = tmp_path / "transcript.txt"
+    not_audio.write_text("안녕하세요", encoding="utf-8")
+
+    with pytest.raises(AudioDeviceError, match="cannot read"):
+        inspect_recording(not_audio)

@@ -30,12 +30,12 @@ _FORBIDDEN_IN_NAMES = frozenset('<>:"/\\|?*')
 
 
 class AudioDeviceError(Exception):
-    """Raised when a recording cannot be started at all.
+    """Raised when a recording cannot be started, or cannot be read back.
 
-    Either no usable output device could be found or addressed, or the WAV
-    file could not be created. A recording that starts and then fails is not
-    an error of this kind: the audio already captured is kept and the reason
-    is reported on the :class:`Recording` instead.
+    Starting fails when no usable output device can be found or addressed,
+    or when the WAV file cannot be created. A recording that starts and then
+    fails is not an error of this kind: the audio already captured is kept
+    and the reason is reported on the :class:`Recording` instead.
     """
 
 
@@ -90,6 +90,45 @@ class Recording:
     peak: float
     mean_rms: float
     interrupted: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExistingRecording:
+    """What a recording already on disk holds.
+
+    Attributes:
+        path: The WAV file.
+        duration: Length in seconds.
+        size_bytes: Size of the file.
+    """
+
+    path: Path
+    duration: float
+    size_bytes: int
+
+
+def inspect_recording(path: Path) -> ExistingRecording:
+    """Read what a recording already on disk holds, without its samples.
+
+    Only the header is touched, so this stays instant on a lecture running
+    to hundreds of megabytes.
+
+    Args:
+        path: WAV file to look at.
+
+    Returns:
+        Its length and size.
+
+    Raises:
+        AudioDeviceError: The file is missing, or is not a sound file that
+            can be read.
+    """
+    try:
+        duration = float(sf.info(path).duration)
+        size = path.stat().st_size
+    except (OSError, RuntimeError) as error:
+        raise AudioDeviceError(f"cannot read {path}: {error}") from error
+    return ExistingRecording(path=path, duration=duration, size_bytes=size)
 
 
 def list_loopback_devices() -> list[LoopbackDevice]:

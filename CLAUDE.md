@@ -121,6 +121,14 @@ scribe launcher              # put the window in the application menu (--remove 
 - Frozen dataclasses cross `QThread` signal boundaries intact and arrive on
   the GUI thread. `Progress`, `Recording` and `Transcription` are passed
   whole rather than unpacked into primitives.
+- **A transcript's title line is the folder name as it was when the
+  transcript was made.** Renaming a lecture folder afterwards leaves the old
+  name in the header of the `.txt` -- both recordings in `~/lectures` on this
+  machine still say `2026-09-10_os` inside, under folders since renamed to
+  lecture titles.
+- Marks belong to the recording they were pressed during, never to a file
+  opened afterwards. `_open_recording` clears them, or `>>>` would land on
+  unrelated sentences.
 - **`model.transcribe()` hands back its info object before it decodes a
   single segment**, so the length of the audio is known up front and real
   progress can be shown rather than a spinner. The segments themselves are a

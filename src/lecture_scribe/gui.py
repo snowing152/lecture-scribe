@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -44,9 +45,11 @@ from PySide6.QtWidgets import (
 
 from lecture_scribe.audio_capture import (
     AudioDeviceError,
+    ExistingRecording,
     LoopbackDevice,
     Progress,
     Recording,
+    inspect_recording,
     lecture_dir,
     list_loopback_devices,
     record_loopback,
@@ -467,13 +470,16 @@ class _Window(QWidget):
         self._mark = QPushButton("mark")
         self._mark.setToolTip("flag this moment in the transcript (Ctrl+M)")
         self._mark.clicked.connect(self._mark_moment)
+        self._open = QPushButton("open")
+        self._open.setToolTip("transcribe a recording made earlier (Ctrl+O)")
+        self._open.clicked.connect(self._open_recording)
         self._text = QPushButton("transcribe")
         self._text.clicked.connect(self._start_transcription)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
         buttons.addStretch(1)
-        for button in (self._record, self._mark, self._text):
+        for button in (self._record, self._mark, self._open, self._text):
             buttons.addWidget(button)
         buttons.addStretch(1)
         layout.addLayout(buttons)
@@ -500,8 +506,10 @@ class _Window(QWidget):
         self._transcript.setFont(transcript_font)
         layout.addWidget(self._transcript, 1)
 
-        shortcut = QShortcut(QKeySequence("Ctrl+M"), self)
-        shortcut.activated.connect(self._mark_moment)
+        mark = QShortcut(QKeySequence("Ctrl+M"), self)
+        mark.activated.connect(self._mark_moment)
+        open_file = QShortcut(QKeySequence("Ctrl+O"), self)
+        open_file.activated.connect(self._open_recording)
 
     def _load_devices(self) -> None:
         """Fill the device list and preselect the configured one."""
@@ -642,6 +650,68 @@ class _Window(QWidget):
             f"({len(self._marks)} in this lecture)"
         )
 
+    def _open_recording(self) -> None:
+        """Pick a recording made earlier and make it the one to transcribe.
+
+        Lectures reach this folder without `scribe rec` having made them --
+        copied in, renamed, recorded on another machine -- and after a
+        restart the window has no recording of its own to work on either.
+        """
+        if self._recording or self._transcribing:
+            return
+
+        chosen, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Open a recording",
+            str(self._config.output.dir),
+            "Recordings (*.wav);;All files (*)",
+        )
+        if not chosen:
+            return
+
+        path = Path(chosen)
+        try:
+            existing = inspect_recording(path)
+        except AudioDeviceError as error:
+            self._say(str(error), problem=True)
+            return
+
+        self._wav = path
+        # Marks belong to the lecture they were pressed during. Carrying them
+        # onto a file opened afterwards would put >>> on unrelated sentences.
+        self._marks = []
+        self._elapsed = 0.0
+        self._meter.reset()
+        self._clock.setText(_clock(existing.duration))
+        self._levels.setText(f"{existing.size_bytes / 1_000_000:.1f} MB")
+        self._show_earlier_transcript(existing)
+        self._refresh()
+
+    def _show_earlier_transcript(self, existing: ExistingRecording) -> None:
+        """Show the transcript beside a recording, when one was made already.
+
+        Args:
+            existing: The recording that was just opened.
+        """
+        transcript = existing.path.parent / "transcript.txt"
+        if not transcript.is_file():
+            self._transcript.clear()
+            self._say(f"{existing.path} · not transcribed yet")
+            return
+
+        try:
+            text = transcript.read_text(encoding="utf-8")
+        except OSError as error:
+            self._transcript.clear()
+            self._say(f"cannot read {transcript}: {error}", problem=True)
+            return
+
+        self._transcript.setPlainText(text)
+        self._say(
+            f"{existing.path} · showing the transcript made earlier, "
+            "transcribing again replaces it"
+        )
+
     def _start_transcription(self) -> None:
         """Hand the recording just made to a worker for recognition."""
         if self._wav is None:
@@ -734,6 +804,7 @@ class _Window(QWidget):
             self._recording or (idle and named and bool(self._devices))
         )
         self._mark.setEnabled(self._recording)
+        self._open.setEnabled(idle)
         self._text.setEnabled(idle and self._wav is not None)
         self._course.setEnabled(idle)
         self._device_box.setEnabled(idle)
