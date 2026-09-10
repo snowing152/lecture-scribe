@@ -30,6 +30,9 @@ from lecture_scribe.config import (
     merge_cli,
 )
 from lecture_scribe.format_text import render_transcript
+from lecture_scribe.launcher import LauncherError
+from lecture_scribe.launcher import install as install_launcher
+from lecture_scribe.launcher import remove as remove_launcher
 from lecture_scribe.transcribe import (
     TranscriptionError,
     compute_type,
@@ -77,6 +80,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _text(merge_cli(config, model=model), wavs)
     if command == "gui":
         return _gui(config)
+    if command == "launcher":
+        return _launcher(remove=args.remove)
 
     step = _PENDING[command]
     print(f"`scribe {command}` arrives in step {step}.", file=sys.stderr)
@@ -106,6 +111,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("gui", help="open the desktop window")
 
+    launcher = commands.add_parser(
+        "launcher", help="put the window in this machine's application menu"
+    )
+    launcher.add_argument(
+        "--remove", action="store_true", help="take the menu entry back out"
+    )
+
     find = commands.add_parser("find", help="full text search across all transcripts")
     find.add_argument("query", help="text to look for")
 
@@ -134,6 +146,55 @@ def _gui(config: Config) -> int:
         )
         return 1
     return run(config)
+
+
+def _launcher(*, remove: bool) -> int:
+    """Add the window to the desktop's application menu, or take it out.
+
+    The entry is pinned to the current directory rather than to the package,
+    because that is the directory whose `config.toml` the tool reads. Running
+    this from somewhere else deliberately produces a different entry.
+
+    Args:
+        remove: Whether to delete the entry instead of writing one.
+
+    Returns:
+        The process exit code.
+    """
+    if remove:
+        try:
+            deleted = remove_launcher()
+        except LauncherError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        if not deleted:
+            print("nothing to remove, there is no menu entry")
+            return 0
+        for path in deleted:
+            _row("removed", str(path))
+        return 0
+
+    workdir = Path.cwd()
+    try:
+        installed = install_launcher(workdir)
+    except LauncherError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    print("added to the application menu")
+    _row("entry", str(installed.entry))
+    _row("runs", str(installed.target))
+    _row("starts in", str(installed.workdir))
+    if installed.icon is not None:
+        _row("icon", str(installed.icon))
+
+    if not (workdir / CONFIG_FILENAME).is_file():
+        print(
+            f"\nnote: there is no {CONFIG_FILENAME} here, so the window will run "
+            "on the built-in defaults. Run this again from the directory holding "
+            "your config file to pin that one instead."
+        )
+    return 0
 
 
 def _rec(config: Config, course: str, *, then_text: bool) -> int:

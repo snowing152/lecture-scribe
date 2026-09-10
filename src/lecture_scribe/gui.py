@@ -54,6 +54,7 @@ from lecture_scribe.audio_capture import (
 )
 from lecture_scribe.config import Config, ConfigError, load_config
 from lecture_scribe.format_text import format_timecode, render_transcript
+from lecture_scribe.launcher import DESKTOP_ID
 from lecture_scribe.transcribe import (
     Transcription,
     TranscriptionError,
@@ -728,6 +729,9 @@ def run(config: Config) -> int:
     """
     app = QApplication(sys.argv)
     app.setApplicationName("lecture-scribe")
+    # Wayland pairs a window with its menu entry by this name, which is how
+    # the window gets the icon `scribe launcher` installed.
+    app.setDesktopFileName(DESKTOP_ID)
     app.setStyle("Fusion")
     app.setStyleSheet(_STYLESHEET)
 

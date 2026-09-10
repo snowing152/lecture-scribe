@@ -49,6 +49,7 @@ format_text.py     segments -> transcript text (pure)
 config.py          config.toml -> frozen dataclasses
 cli.py             argument parsing, printing and wiring, nothing else
 gui.py             the desktop window (Qt), wiring and drawing, nothing else
+launcher.py        desktop menu entry, both platforms
 archive.py         SQLite FTS5 index (step 5, not written yet)
 ```
 
@@ -78,6 +79,7 @@ uv run pytest                # manual tests excluded
 uv run pytest -m manual      # needs hardware or the model
 uv run scribe doctor         # what the tool can see on this machine
 uv run scribe gui            # the window; scribe-gui skips the console on Windows
+scribe launcher              # put the window in the application menu (--remove undoes)
 ```
 
 ## Non-obvious facts, verified on this machine
@@ -101,7 +103,10 @@ uv run scribe gui            # the window; scribe-gui skips the console on Windo
   extra arguments — its own bug in program name detection. Harmless for the
   CLI, annoying when probing by hand; pass a dummy argument.
 - `config.toml` is read from the current directory only, and unknown keys are
-  an error rather than a silent default.
+  an error rather than a silent default. This is why the desktop entry pins
+  `Path=`: a menu starts a program from the home directory, where the window
+  would silently run on the defaults. `scribe launcher` therefore writes
+  `Path.cwd()`, the same directory the CLI itself read its config from.
 - **tkinter cannot be the GUI here, which is why Qt is a dependency.** The Tk
   bundled with uv's managed CPython is built without Xft or fontconfig:
   `libtcl9tk9.0.so` has no `Xft`/`Fc` symbols, `tkinter.font.families()`
@@ -116,6 +121,15 @@ uv run scribe gui            # the window; scribe-gui skips the console on Windo
 - Frozen dataclasses cross `QThread` signal boundaries intact and arrive on
   the GUI thread. `Progress`, `Recording` and `Transcription` are passed
   whole rather than unpacked into primitives.
+- Wayland pairs a window with its menu entry by name, not by process: the
+  entry's `StartupWMClass` and `QApplication.setDesktopFileName` both say
+  `launcher.DESKTOP_ID`, or the window appears without its icon.
+- `Categories=` takes exactly one main category. `AudioVideo;Audio;Utility;`
+  is valid but lists the window twice in the menu; `desktop-file-validate`
+  reports it as a hint rather than an error.
+- A `.lnk` is a binary format, so the Windows shortcut is written by
+  PowerShell's `WScript.Shell` rather than by hand. That keeps a Start Menu
+  entry from costing a dependency.
 
 ## Recognition settings that must not drift
 
@@ -137,4 +151,5 @@ uv run scribe gui            # the window; scribe-gui skips the console on Windo
 | 3 | `format_text.py`: paragraphs, `[MM:SS]` timecodes, `>>>` markers | done |
 | 4 | `--then-text`, important-moment hotkey, free space check | in progress — free space check (`scribe doctor`) and `>>>` mark rendering (`format_text.render_transcript`, `marks=`) done; marking exists in the window (button, Ctrl+M) but not in the CLI; `--then-text` flag parses but is stubbed |
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
+| L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — written and verified on Linux; the Windows branch is unrun |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |

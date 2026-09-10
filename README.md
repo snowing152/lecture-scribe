@@ -35,6 +35,7 @@ uv run scribe doctor                  # first command to run on a new machine
 | `scribe rec --course os` | record system audio until Ctrl+C |
 | `scribe text audio.wav` | transcribe one or more recordings, writing `transcript.txt` |
 | `scribe gui` | the same recording and transcribing in one window |
+| `scribe launcher` | put that window in this machine's application menu |
 | `scribe find "기말고사"` | search every transcript — *step 5* |
 
 Prefix them with `uv run`, or run `uv tool install --editable .` once to get a
@@ -82,6 +83,22 @@ first, because a model run cannot be resumed part way through.
 
 On Windows there is a second launcher, `scribe-gui`, which opens the window
 with no console behind it.
+
+### Opening it without a terminal
+
+```bash
+uv tool install --editable . --force   # once, so scribe-gui is on the PATH
+scribe launcher                        # from the directory holding config.toml
+```
+
+That adds lecture-scribe to the application menu — the Super launcher on a
+tiling setup, the Start Menu on Windows — with an icon, so the terminal is
+only needed to set it up. `scribe launcher --remove` takes it back out.
+
+Run it **from the directory your `config.toml` lives in**. A menu starts a
+program from your home directory, where there is no config file to read, so
+the entry pins the working directory to wherever you ran it; it says so if it
+finds no `config.toml` there.
 
 ## Typical workflow
 
