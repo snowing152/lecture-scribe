@@ -63,23 +63,10 @@ class OutputConfig:
     Attributes:
         dir: Root directory holding one folder per lecture.
         paragraph_gap: Pause in seconds that starts a new paragraph.
-        low_confidence: ``avg_logprob`` below which a segment is marked ``(?)``.
     """
 
     dir: Path = field(default_factory=lambda: Path("~/lectures").expanduser())
     paragraph_gap: float = 1.2
-    low_confidence: float = -1.0
-
-
-@dataclass(frozen=True, slots=True)
-class GlossaryConfig:
-    """Where per-course term lists live.
-
-    Attributes:
-        dir: Directory holding one ``<course>.txt`` glossary per subject.
-    """
-
-    dir: Path = field(default_factory=lambda: Path("glossary"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,14 +77,12 @@ class Config:
         audio: Capture settings.
         asr: Recognition settings.
         output: Result location and transcript shape.
-        glossary: Term list location.
         source: File the settings were read from, or ``None`` for defaults.
     """
 
     audio: AudioConfig = AudioConfig()
     asr: AsrConfig = AsrConfig()
     output: OutputConfig = OutputConfig()
-    glossary: GlossaryConfig = GlossaryConfig()
     source: Path | None = None
 
 
@@ -127,13 +112,12 @@ def load_config(path: Path | None = None) -> Config:
     except OSError as error:
         raise ConfigError(f"cannot read {config_path}: {error}") from error
 
-    sections = ("audio", "asr", "output", "glossary")
+    sections = ("audio", "asr", "output")
     _reject_unknown("config.toml", raw, sections)
     return Config(
         audio=_audio(_section(raw, "audio")),
         asr=_asr(_section(raw, "asr")),
         output=_output(_section(raw, "output")),
-        glossary=_glossary(_section(raw, "glossary")),
         source=config_path,
     )
 
@@ -200,15 +184,7 @@ def _output(raw: Mapping[str, Any]) -> OutputConfig:
     return OutputConfig(
         dir=_path("output", raw, "dir", default.dir),
         paragraph_gap=_float("output", raw, "paragraph_gap", default.paragraph_gap),
-        low_confidence=_float("output", raw, "low_confidence", default.low_confidence),
     )
-
-
-def _glossary(raw: Mapping[str, Any]) -> GlossaryConfig:
-    """Build the ``[glossary]`` section."""
-    _reject_unknown("glossary", raw, _names(GlossaryConfig))
-    default = GlossaryConfig()
-    return GlossaryConfig(dir=_path("glossary", raw, "dir", default.dir))
 
 
 def _names(cls: type) -> tuple[str, ...]:

@@ -38,15 +38,14 @@ Everything runs locally. CLI only.
 ```
 audio_capture.py   system audio -> WAV on disk, plus device discovery
 transcribe.py      WAV -> list[Segment], plus model and GPU readiness
-format_text.py     segments -> transcript text and subtitles (pure)
-glossary.py        term file -> prompt string and replacements (pure)
+format_text.py     segments -> transcript text (pure)
 config.py          config.toml -> frozen dataclasses
 cli.py             argument parsing, printing and wiring, nothing else
 archive.py         SQLite FTS5 index (step 5, not written yet)
 ```
 
-`format_text.py` and `glossary.py` never touch the disk. `cli.py` holds no
-logic of its own: each module reports about its own domain and the CLI prints.
+`format_text.py` never touches the disk. `cli.py` holds no logic of its own:
+each module reports about its own domain and the CLI prints.
 
 ## Conventions
 
@@ -111,6 +110,6 @@ uv run scribe doctor         # what the tool can see on this machine
 | 0 | skeleton, config, `scribe doctor` | done |
 | 1 | `audio_capture.py`, `scribe rec` | done |
 | 2 | `transcribe.py`, `scribe text`, flat output | done |
-| 3 | `format_text.py`, `glossary.py`, paragraphs, markers, `.srt`, `.json` | next |
+| 3 | `format_text.py`: paragraphs, `[MM:SS]` timecodes, `>>>` markers | done |
 | 4 | `--then-text`, important-moment hotkey, free space check | |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |

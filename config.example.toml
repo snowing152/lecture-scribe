@@ -12,7 +12,3 @@ beam_size = 5
 [output]
 dir = "~/lectures"
 paragraph_gap = 1.2      # seconds of pause that break a paragraph
-low_confidence = -1.0    # avg_logprob below this gets the (?) marker
-
-[glossary]
-dir = "glossary"

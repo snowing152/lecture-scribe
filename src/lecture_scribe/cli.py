@@ -1,7 +1,6 @@
 """Command line entry point: argument parsing and wiring, nothing else."""
 
 import argparse
-import json
 import math
 import platform
 import shutil
@@ -10,7 +9,6 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
@@ -31,6 +29,7 @@ from lecture_scribe.config import (
     load_config,
     merge_cli,
 )
+from lecture_scribe.format_text import render_transcript
 from lecture_scribe.transcribe import (
     TranscriptionError,
     compute_type,
@@ -75,8 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "text":
         wavs: list[Path] = args.wav
         model: str | None = args.model
-        text_course: str | None = args.course
-        return _text(merge_cli(config, model=model), wavs, course=text_course)
+        return _text(merge_cli(config, model=model), wavs)
 
     step = _PENDING[command]
     print(f"`scribe {command}` arrives in step {step}.", file=sys.stderr)
@@ -103,7 +101,6 @@ def _build_parser() -> argparse.ArgumentParser:
     text = commands.add_parser("text", help="transcribe one or more recordings")
     text.add_argument("wav", nargs="+", type=Path, help="WAV files to transcribe")
     text.add_argument("--model", help="override the configured ASR model")
-    text.add_argument("--course", help="glossary to bias the decoder with")
 
     find = commands.add_parser("find", help="full text search across all transcripts")
     find.add_argument("query", help="text to look for")
@@ -174,8 +171,8 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
     return 0
 
 
-def _text(config: Config, wavs: list[Path], *, course: str | None) -> int:
-    """Transcribe one or more recordings, writing a plain .txt and .json.
+def _text(config: Config, wavs: list[Path]) -> int:
+    """Transcribe one or more recordings, writing a readable transcript.txt.
 
     Paths are checked before the model is loaded: large-v3 can take a while
     to load or download, and a typo in a filename should fail in an instant
@@ -186,26 +183,17 @@ def _text(config: Config, wavs: list[Path], *, course: str | None) -> int:
     can take longer than transcribing a short recording, and a lecture
     archive may hold many files.
 
-    Output is deliberately unformatted for now -- paragraphs, timecodes in
-    the text, low-confidence markers and the .srt file are format_text.py's
-    job, in step 3. One bad file is reported and skipped rather than aborting
-    the rest of the batch; a missing model affects every file identically and
-    aborts immediately instead.
+    One bad file is reported and skipped rather than aborting the rest of the
+    batch; a missing model affects every file identically and aborts
+    immediately instead.
 
     Args:
         config: Effective configuration, command line overrides applied.
         wavs: Recordings to transcribe.
-        course: Value of --course; glossary bias is not wired up yet.
 
     Returns:
         The process exit code: 0 if every file transcribed, 1 if any failed.
     """
-    if course is not None:
-        print(
-            f"note: --course glossary bias is not wired up yet, it arrives "
-            f"in step 3; transcribing '{course}' without it\n"
-        )
-
     failures = 0
     existing = []
     for wav in wavs:
@@ -239,13 +227,14 @@ def _text(config: Config, wavs: list[Path], *, course: str | None) -> int:
             continue
 
         text_path = wav.parent / "transcript.txt"
-        json_path = wav.parent / "segments.json"
         text_path.write_text(
-            "\n".join(segment.text for segment in result.segments), encoding="utf-8"
-        )
-        json_path.write_text(
-            json.dumps(
-                [asdict(s) for s in result.segments], ensure_ascii=False, indent=2
+            render_transcript(
+                result.segments,
+                title=wav.parent.name,
+                model=config.asr.model,
+                language=config.asr.language,
+                audio_duration=result.audio_duration,
+                paragraph_gap=config.output.paragraph_gap,
             ),
             encoding="utf-8",
         )
@@ -261,7 +250,7 @@ def _text(config: Config, wavs: list[Path], *, course: str | None) -> int:
             "decoding",
             f"{_hms(result.decode_seconds)} ({ratio:.2f}x audio length)",
         )
-        _row("wrote", f"{text_path.name}, {json_path.name}")
+        _row("wrote", text_path.name)
 
     return 1 if failures else 0
 
@@ -449,7 +438,6 @@ def _output_report(config: Config) -> None:
     free_gb = shutil.disk_usage(anchor).free / 1_000_000_000
     # An hour of 16 kHz mono PCM is about 115 MB, so this is only ever a sanity check.
     _row("free space", f"{free_gb:.1f} GB")
-    _row("glossary", str(config.glossary.dir))
 
 
 def _row(label: str, value: str) -> None:

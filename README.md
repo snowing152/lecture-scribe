@@ -9,7 +9,7 @@ speech model once.
 
 ```
    system audio  ──▶  audio.wav  ──▶   segments   ──▶  transcript.txt
-     loopback          16 kHz          whisper          .srt · .json
+     loopback          16 kHz          whisper
     scribe rec                       scribe text
 ```
 
@@ -32,7 +32,7 @@ uv run scribe doctor                  # first command to run on a new machine
 |---|---|
 | `scribe doctor` | show devices, model and GPU; writes nothing |
 | `scribe rec --course os` | record system audio until Ctrl+C |
-| `scribe text audio.wav` | transcribe one or more recordings, writing `transcript.txt` and `segments.json` |
+| `scribe text audio.wav` | transcribe one or more recordings, writing `transcript.txt` |
 | `scribe find "기말고사"` | search every transcript — *step 5* |
 
 Prefix them with `uv run`. While recording, one line keeps updating:
@@ -51,10 +51,7 @@ One lecture, one folder under `output.dir`:
 ```
 ~/lectures/2026-09-09_os/
 ├── audio.wav        the recording, never deleted automatically
-├── transcript.txt   the thing to read
-├── transcript.srt   subtitles, to replay a passage in mpv or VLC
-├── segments.json    raw segments with timecodes and confidence
-└── marks.txt        moments flagged during the lecture
+└── transcript.txt   the thing to read
 ```
 
 A second lecture on the same subject and day goes to `2026-09-09_os-2`;
@@ -63,15 +60,14 @@ nothing is ever written on top of an existing recording.
 The transcript reads like this:
 
 ```
-[00:47] 먼저 문맥 교환 (context switch) 이 무엇인지 봅시다. 프로세스가
-        바뀔 때마다 CPU 는 레지스터 상태를 저장하고 복원해야 합니다.
+[00:47] 먼저 문맥 교환이 무엇인지 봅시다. 프로세스가 바뀔 때마다 CPU 는
+        레지스터 상태를 저장하고 복원해야 합니다.
 
 >>> [12:30] 이 부분은 기말고사에 나옵니다.
 ```
 
-Paragraphs break on a pause, `(?)` marks a passage the model was unsure of,
-`>>>` marks a moment flagged during the lecture, and glossary terms carry
-their English meaning.
+Paragraphs break on a pause, and `>>>` marks a moment flagged during the
+lecture.
 
 ## Configuration
 
@@ -88,23 +84,8 @@ their English meaning.
 | `asr.beam_size` | `5` | decoder beam width |
 | `output.dir` | `"~/lectures"` | one folder per lecture lands here |
 | `output.paragraph_gap` | `1.2` | seconds of pause that start a paragraph |
-| `output.low_confidence` | `-1.0` | log-probability below which `(?)` appears |
-| `glossary.dir` | `"glossary"` | where per-subject term lists live |
 
 A typo in a key is an error, not a silently ignored line.
-
-## Glossary
-
-One file per subject in `glossary/`, named after the course:
-
-```
-운영체제: operating system
-문맥 교환: context switch
-교착 상태: deadlock
-```
-
-The Korean terms are fed to the decoder so it spells them the way the
-professor says them, and the English meaning is added to the transcript.
 
 ## Development
 

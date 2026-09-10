@@ -129,7 +129,7 @@ def test_transcribe_passes_the_fixed_decoding_settings(tmp_path: Path) -> None:
     wav.touch()
     model = _FakeModel(segments=[], duration=0.0)
 
-    transcribe(model, wav, language="ko", beam_size=5, initial_prompt="문맥 교환")
+    transcribe(model, wav, language="ko", beam_size=5)
 
     call = model.calls[0]
     assert call["language"] == "ko"
@@ -137,7 +137,6 @@ def test_transcribe_passes_the_fixed_decoding_settings(tmp_path: Path) -> None:
     assert call["vad_filter"] is True
     assert call["vad_parameters"] == {"min_silence_duration_ms": 500}
     assert call["condition_on_previous_text"] is False
-    assert call["initial_prompt"] == "문맥 교환"
 
 
 def test_transcribe_wraps_decoder_failures(tmp_path: Path) -> None:

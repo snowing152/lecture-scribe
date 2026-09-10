@@ -210,7 +210,6 @@ def transcribe(
     *,
     language: str,
     beam_size: int,
-    initial_prompt: str | None = None,
 ) -> Transcription:
     """Recognise the speech in one WAV file.
 
@@ -227,8 +226,6 @@ def transcribe(
         wav: Recording to transcribe.
         language: Spoken language, as a Whisper language code.
         beam_size: Beam search width.
-        initial_prompt: Text that biases the decoder, typically glossary
-            terms for the course.
 
     Returns:
         The recognised segments plus timing.
@@ -246,7 +243,6 @@ def transcribe(
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
-            initial_prompt=initial_prompt,
         )
         segments = [
             Segment(
