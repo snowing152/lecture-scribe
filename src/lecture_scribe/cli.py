@@ -252,6 +252,9 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
     print(f"stopped after {_hms(recording.duration)}")
     _row("size", f"{target.stat().st_size / 1_000_000:.1f} MB")
     _row("level", f"mean {_dbfs(recording.mean_rms)}, peak {_dbfs(recording.peak)}")
+    if recording.interrupted is not None:
+        print(f"\n{recording.interrupted}.", file=sys.stderr)
+        return 1
     if recording.mean_rms < config.audio.silence_rms:
         print(
             "\nthe recording is silent from end to end. The audio was kept anyway; "

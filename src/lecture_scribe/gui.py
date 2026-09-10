@@ -576,7 +576,9 @@ class _Window(QWidget):
             f"peak {_dbfs(recording.peak)}   ·   "
             f"{recording.path.stat().st_size / 1_000_000:.1f} MB"
         )
-        if recording.mean_rms < self._config.audio.silence_rms:
+        if recording.interrupted is not None:
+            self._say(recording.interrupted, problem=True)
+        elif recording.mean_rms < self._config.audio.silence_rms:
             self._say(
                 "the recording is silent from end to end. The audio was kept "
                 "anyway; check that the lecture was playing through the "
@@ -595,10 +597,23 @@ class _Window(QWidget):
         self._refresh()
 
     def _release_recorder(self) -> None:
-        """Drop the finished worker, waiting so it is never freed mid-run."""
+        """Drop the finished worker, never leaving the window mid-recording.
+
+        A worker's own signals are skipped entirely if its thread dies on an
+        exception, while `finished` arrives either way. Clearing the state
+        here rather than only in the slots means an unreported death leaves
+        the window honest instead of frozen with a stop button and a dead
+        clock -- where the next press would quietly start a second recording.
+        """
         if self._recorder is not None:
             self._recorder.wait()
             self._recorder = None
+        if self._recording:
+            self._recording = False
+            self._meter.reset()
+            kept = f"; whatever was captured is at {self._wav}" if self._wav else ""
+            self._say(f"the recording ended without saying why{kept}", problem=True)
+            self._refresh()
 
     def _mark_moment(self) -> None:
         """Flag the current offset so its paragraph is prefixed with ``>>>``."""
@@ -647,10 +662,23 @@ class _Window(QWidget):
         self._refresh()
 
     def _release_transcriber(self) -> None:
-        """Drop the finished worker, waiting so it is never freed mid-run."""
+        """Drop the finished worker, never leaving the window mid-recognition.
+
+        The same reasoning as :meth:`_release_recorder`: a thread that dies
+        without reporting would otherwise leave every button disabled for
+        good.
+        """
         if self._transcriber is not None:
             self._transcriber.wait()
             self._transcriber = None
+        if self._transcribing:
+            self._transcribing = False
+            self._say(
+                "recognition ended without saying why; the recording itself "
+                "is untouched and can be transcribed again",
+                problem=True,
+            )
+            self._refresh()
 
     def _refresh(self) -> None:
         """Bring every control into line with what the window is doing."""

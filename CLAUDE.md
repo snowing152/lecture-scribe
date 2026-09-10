@@ -121,6 +121,16 @@ scribe launcher              # put the window in the application menu (--remove 
 - Frozen dataclasses cross `QThread` signal boundaries intact and arrive on
   the GUI thread. `Progress`, `Recording` and `Transcription` are passed
   whole rather than unpacked into primitives.
+- A recording that dies part way through returns rather than raises: leaving
+  the `with` closes the WAV, so the audio already captured stays valid, and
+  `Recording.interrupted` carries the reason. Only a recording that never
+  started at all is an `AudioDeviceError`.
+- **A `QThread` whose `run()` raises emits none of its own signals, but
+  `finished` arrives either way.** The window therefore clears its recording
+  state in the `finished` slot rather than only in the result slots. Before
+  that, an unreported death left it showing a stop button and a frozen clock,
+  with the status line still saying `ready` -- and the next press started a
+  second recording into a new folder.
 - Wayland pairs a window with its menu entry by name, not by process: the
   entry's `StartupWMClass` and `QApplication.setDesktopFileName` both say
   `launcher.DESKTOP_ID`, or the window appears without its icon.

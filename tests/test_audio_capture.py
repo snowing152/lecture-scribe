@@ -1,13 +1,20 @@
-"""Tests for the pure parts of capture: device choice and folder naming."""
+"""Tests for device choice, folder naming and how a recording ends."""
 
+import threading
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+import numpy.typing as npt
 import pytest
+import soundfile as sf
 
+from lecture_scribe import audio_capture
 from lecture_scribe.audio_capture import (
+    BLOCK_FRAMES,
     AudioDeviceError,
     LoopbackDevice,
+    Recording,
     course_slug,
     lecture_dir,
     resolve_device,
@@ -77,3 +84,121 @@ def test_course_names_lose_characters_windows_forbids() -> None:
 def test_course_name_without_usable_characters_is_refused() -> None:
     with pytest.raises(ValueError, match="usable"):
         course_slug(" / ")
+
+
+class _FakeRecorder:
+    """Serves a fixed number of blocks, then stops the recording or fails.
+
+    Stands in for soundcard's recorder so the capture loop can be exercised
+    with no audio hardware present.
+    """
+
+    def __init__(
+        self,
+        blocks: int,
+        stop: threading.Event,
+        failure: Exception | None = None,
+    ) -> None:
+        self._blocks = blocks
+        self._stop = stop
+        self._failure = failure
+        self._served = 0
+
+    def __enter__(self) -> "_FakeRecorder":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def record(self, numframes: int) -> npt.NDArray[np.float32]:
+        if self._served >= self._blocks and self._failure is not None:
+            raise self._failure
+        self._served += 1
+        if self._failure is None and self._served >= self._blocks:
+            self._stop.set()
+        return np.full((numframes, 2), 0.25, dtype=np.float32)
+
+
+class _FakeMicrophone:
+    """Hands out one prepared recorder, whatever it is asked for."""
+
+    def __init__(self, recorder: _FakeRecorder) -> None:
+        self._recorder = recorder
+
+    def recorder(self, **_kwargs: object) -> _FakeRecorder:
+        return self._recorder
+
+
+def _record(
+    target: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    blocks: int,
+    failure: Exception | None = None,
+) -> Recording:
+    stop = threading.Event()
+    microphone = _FakeMicrophone(_FakeRecorder(blocks, stop, failure))
+    monkeypatch.setattr(
+        audio_capture, "_loopback_microphone", lambda _device: microphone
+    )
+    return audio_capture.record_loopback(SPEAKER, target, sample_rate=16000, stop=stop)
+
+
+def test_a_recording_that_reaches_the_stop_event_is_not_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording = _record(tmp_path / "audio.wav", monkeypatch, blocks=3)
+
+    assert recording.interrupted is None
+    assert recording.duration == pytest.approx(3 * BLOCK_FRAMES / 16000)
+
+
+def test_a_disk_giving_out_keeps_everything_recorded_so_far(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "audio.wav"
+
+    recording = _record(
+        target, monkeypatch, blocks=3, failure=OSError(28, "No space left on device")
+    )
+
+    # The lecture is what cannot be recreated, so a dying disk must not cost
+    # the part that already reached it.
+    assert recording.interrupted is not None
+    assert "No space left on device" in recording.interrupted
+    assert recording.duration == pytest.approx(3 * BLOCK_FRAMES / 16000)
+    assert sf.info(target).frames == 3 * BLOCK_FRAMES
+
+
+def test_a_device_lost_mid_recording_is_reported_the_same_way(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording = _record(
+        tmp_path / "audio.wav",
+        monkeypatch,
+        blocks=2,
+        failure=RuntimeError("stream has been terminated"),
+    )
+
+    assert recording.interrupted is not None
+    assert "stream has been terminated" in recording.interrupted
+
+
+def test_a_failure_before_the_first_block_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nothing was recorded, so there is no partial lecture worth returning.
+    with pytest.raises(AudioDeviceError, match="stream has been terminated"):
+        _record(
+            tmp_path / "audio.wav",
+            monkeypatch,
+            blocks=0,
+            failure=RuntimeError("stream has been terminated"),
+        )
+
+
+def test_a_file_that_cannot_be_created_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(AudioDeviceError, match="cannot record to"):
+        _record(tmp_path / "missing" / "audio.wav", monkeypatch, blocks=3)

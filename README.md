@@ -153,7 +153,9 @@ While recording, one line keeps updating:
 ```
 
 If the first ten seconds are silent it says so and **keeps recording** — a
-false alarm should never cost a lecture.
+false alarm should never cost a lecture. If the disk fills up or the device
+disappears part way through, the recording stops there and says why; the audio
+captured up to that point is kept, and can be transcribed as it is.
 
 Transcribe afterwards, on the same machine or a faster one, whenever
 convenient — recording and transcription never have to happen back to back:

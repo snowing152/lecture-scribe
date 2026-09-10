@@ -30,7 +30,13 @@ _FORBIDDEN_IN_NAMES = frozenset('<>:"/\\|?*')
 
 
 class AudioDeviceError(Exception):
-    """Raised when no usable output device can be found or addressed."""
+    """Raised when a recording cannot be started at all.
+
+    Either no usable output device could be found or addressed, or the WAV
+    file could not be created. A recording that starts and then fails is not
+    an error of this kind: the audio already captured is kept and the reason
+    is reported on the :class:`Recording` instead.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,12 +80,16 @@ class Recording:
         duration: Length in seconds.
         peak: Loudest single sample, from 0.0 to 1.0.
         mean_rms: Average level across the whole recording.
+        interrupted: Why the recording ended before it was asked to, or
+            ``None`` when it ran to the stop event as intended. The file is
+            complete and playable either way.
     """
 
     path: Path
     duration: float
     peak: float
     mean_rms: float
+    interrupted: str | None = None
 
 
 def list_loopback_devices() -> list[LoopbackDevice]:
@@ -180,67 +190,85 @@ def record_loopback(
         on_progress: Called after every block with the current state.
 
     Returns:
-        What the finished file contains.
+        What the finished file contains, including why it ended early if a
+        disk or a device gave out part way through.
 
     Raises:
-        AudioDeviceError: The device has no loopback input or cannot be opened.
+        AudioDeviceError: The device has no loopback input, cannot be opened,
+            or the file could not be created -- that is, nothing was recorded
+            at all.
     """
     microphone = _loopback_microphone(device)
 
     frames = 0
     energy = 0.0
     peak = 0.0
+    interrupted: str | None = None
     silence_checked = silence_rms <= 0.0
     silence_frames = int(_SILENCE_CHECK_SECONDS * sample_rate)
 
-    with (
-        sf.SoundFile(
-            path, mode="w", samplerate=sample_rate, channels=1, subtype="PCM_16"
-        ) as wav,
-        # Two channels are requested even though one is written: asking WASAPI
-        # for a single channel returns garbage, so the mixdown happens here.
-        microphone.recorder(
-            samplerate=sample_rate,
-            channels=_CAPTURE_CHANNELS,
-            blocksize=BLOCK_FRAMES,
-        ) as recorder,
-    ):
-        while not stop.is_set():
-            block = recorder.record(numframes=BLOCK_FRAMES)
-            # Mean rather than sum: adding two channels clips past 1.0.
-            mono = np.mean(block, axis=1)
-            wav.write(mono)
+    # A full disk, an unplugged device or a sound server going away all reach
+    # here as OSError or RuntimeError. Leaving the `with` closes the file on
+    # the way out, so whatever was captured stays valid and playable, and a
+    # lecture that stops at minute 47 is worth far more than an exception.
+    try:
+        with (
+            sf.SoundFile(
+                path, mode="w", samplerate=sample_rate, channels=1, subtype="PCM_16"
+            ) as wav,
+            # Two channels are requested even though one is written: asking
+            # WASAPI for a single channel returns garbage, so the mixdown
+            # happens here.
+            microphone.recorder(
+                samplerate=sample_rate,
+                channels=_CAPTURE_CHANNELS,
+                blocksize=BLOCK_FRAMES,
+            ) as recorder,
+        ):
+            while not stop.is_set():
+                block = recorder.record(numframes=BLOCK_FRAMES)
+                # Mean rather than sum: adding two channels clips past 1.0.
+                mono = np.mean(block, axis=1)
+                wav.write(mono)
 
-            block_energy = float(np.dot(mono, mono))
-            frames += len(mono)
-            energy += block_energy
-            peak = max(peak, float(np.max(np.abs(mono))))
+                block_energy = float(np.dot(mono, mono))
+                frames += len(mono)
+                energy += block_energy
+                peak = max(peak, float(np.max(np.abs(mono))))
 
-            warning = None
-            if not silence_checked and frames >= silence_frames:
-                silence_checked = True
-                if math.sqrt(energy / frames) < silence_rms:
-                    warning = (
-                        f"the first {_SILENCE_CHECK_SECONDS:.0f} seconds are "
-                        f"silent, check that the lecture plays through "
-                        f"'{device.name}' -- recording continues"
+                warning = None
+                if not silence_checked and frames >= silence_frames:
+                    silence_checked = True
+                    if math.sqrt(energy / frames) < silence_rms:
+                        warning = (
+                            f"the first {_SILENCE_CHECK_SECONDS:.0f} seconds are "
+                            f"silent, check that the lecture plays through "
+                            f"'{device.name}' -- recording continues"
+                        )
+
+                if on_progress is not None:
+                    on_progress(
+                        Progress(
+                            elapsed=frames / sample_rate,
+                            rms=math.sqrt(block_energy / len(mono)),
+                            bytes_written=_WAV_HEADER_BYTES + frames * 2,
+                            warning=warning,
+                        )
                     )
-
-            if on_progress is not None:
-                on_progress(
-                    Progress(
-                        elapsed=frames / sample_rate,
-                        rms=math.sqrt(block_energy / len(mono)),
-                        bytes_written=_WAV_HEADER_BYTES + frames * 2,
-                        warning=warning,
-                    )
-                )
+    except (OSError, RuntimeError) as error:
+        if frames == 0:
+            raise AudioDeviceError(f"cannot record to {path}: {error}") from error
+        interrupted = (
+            f"the recording stopped early: {error}. Everything captured up to "
+            "that point was kept, and can be transcribed as it is"
+        )
 
     return Recording(
         path=path,
         duration=frames / sample_rate,
         peak=peak,
         mean_rms=math.sqrt(energy / frames) if frames else 0.0,
+        interrupted=interrupted,
     )
 
 
