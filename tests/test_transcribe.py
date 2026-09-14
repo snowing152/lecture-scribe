@@ -12,16 +12,57 @@ from lecture_scribe.transcribe import (
     Decoding,
     TranscriptionError,
     compute_type,
+    earlier_transcript,
     gpu_status,
     hub_cache_dir,
     model_status,
     transcribe,
+    transcript_path,
 )
 
 
 def test_compute_type_matches_the_device() -> None:
     assert compute_type(gpu=False) == "int8"
     assert compute_type(gpu=True) == "int8_float16"
+
+
+def test_transcript_is_named_after_the_folder_as_it_is_now(tmp_path: Path) -> None:
+    folder = tmp_path / "2026-09-14_컴넷-2-2"
+
+    assert transcript_path(folder / "audio.wav") == folder / "2026-09-14_컴넷-2-2.txt"
+
+
+def test_no_earlier_transcript_beside_a_fresh_recording(tmp_path: Path) -> None:
+    assert earlier_transcript(tmp_path / "audio.wav") is None
+
+
+def test_earlier_transcript_is_found_under_the_current_name_first(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "Row-Reduction"
+    folder.mkdir()
+    for name in ("Row-Reduction.txt", "2026-09-13_linear.txt", "transcript.txt"):
+        (folder / name).write_text("", encoding="utf-8")
+
+    found = earlier_transcript(folder / "2026-09-13_linear.wav")
+
+    assert found == folder / "Row-Reduction.txt"
+
+
+def test_earlier_transcript_survives_a_renamed_folder(tmp_path: Path) -> None:
+    folder = tmp_path / "Row-Reduction"
+    folder.mkdir()
+    (folder / "2026-09-13_linear.txt").write_text("", encoding="utf-8")
+
+    found = earlier_transcript(folder / "2026-09-13_linear.wav")
+
+    assert found == folder / "2026-09-13_linear.txt"
+
+
+def test_earlier_transcript_under_the_old_fixed_name_is_found(tmp_path: Path) -> None:
+    (tmp_path / "transcript.txt").write_text("", encoding="utf-8")
+
+    assert earlier_transcript(tmp_path / "audio.wav") == tmp_path / "transcript.txt"
 
 
 def test_uncached_model_is_reported_as_such(

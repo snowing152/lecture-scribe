@@ -20,6 +20,7 @@ from lecture_scribe.audio_capture import (
     lecture_dir,
     list_loopback_devices,
     record_loopback,
+    recording_path,
     resolve_device,
 )
 from lecture_scribe.config import (
@@ -42,6 +43,7 @@ from lecture_scribe.transcribe import (
     load_model,
     model_status,
     transcribe,
+    transcript_path,
 )
 
 # Commands whose arguments are already fixed but whose behaviour arrives later.
@@ -225,7 +227,7 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     folder.mkdir(parents=True)
-    target = folder / "audio.wav"
+    target = recording_path(folder)
 
     awake = keep_awake("recording a lecture")
     print(f"recording to {target}")
@@ -277,7 +279,7 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
 
 
 def _text(config: Config, wavs: list[Path]) -> int:
-    """Transcribe one or more recordings, writing a readable transcript.txt.
+    """Transcribe one or more recordings, writing a readable transcript of each.
 
     Paths are checked before the model is loaded: large-v3 can take a while
     to load or download, and a typo in a filename should fail in an instant
@@ -376,13 +378,13 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
         status.clear()
 
         if result.interrupted is not None:
-            # Half a lecture written to transcript.txt would read as a whole
+            # Half a lecture written to a transcript would read as a whole
             # one, and would sit on top of a complete transcript from an
             # earlier run. The partial segments are dropped instead.
             print(f"  {result.interrupted}.", file=sys.stderr)
             return 1
 
-        text_path = wav.parent / "transcript.txt"
+        text_path = transcript_path(wav)
         text_path.write_text(
             render_transcript(
                 result.segments,
