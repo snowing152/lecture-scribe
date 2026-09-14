@@ -57,6 +57,7 @@ from lecture_scribe.audio_capture import (
 )
 from lecture_scribe.config import Config, ConfigError, load_config
 from lecture_scribe.format_text import format_timecode, render_transcript
+from lecture_scribe.keep_awake import Inhibition, keep_awake
 from lecture_scribe.launcher import DESKTOP_ID
 from lecture_scribe.transcribe import (
     Decoding,
@@ -425,6 +426,8 @@ class _Window(QWidget):
         self._devices: list[LoopbackDevice] = []
         self._recorder: _RecordWorker | None = None
         self._transcriber: _TranscribeWorker | None = None
+        # Recording and recognition never run at once, so one request covers both.
+        self._awake: Inhibition | None = None
         self._recording = False
         self._transcribing = False
         self._closing = False
@@ -599,8 +602,12 @@ class _Window(QWidget):
 
         self._recorder = worker
         self._recording = True
+        self._awake = keep_awake("recording a lecture")
         self._refresh()
-        self._say(f"recording to {self._wav}")
+        note = (
+            "" if self._awake.held else f" · the screen may lock: {self._awake.detail}"
+        )
+        self._say(f"recording to {self._wav}{note}")
         worker.start()
 
     def _on_progress(self, progress: Progress) -> None:
@@ -657,6 +664,7 @@ class _Window(QWidget):
         if self._recorder is not None:
             self._recorder.wait()
             self._recorder = None
+        self._let_sleep()
         if self._recording:
             self._recording = False
             self._meter.reset()
@@ -756,6 +764,7 @@ class _Window(QWidget):
 
         self._transcriber = worker
         self._transcribing = True
+        self._awake = keep_awake("transcribing a lecture")
         self._refresh()
         worker.start()
 
@@ -828,6 +837,7 @@ class _Window(QWidget):
         if self._transcriber is not None:
             self._transcriber.wait()
             self._transcriber = None
+        self._let_sleep()
         if self._transcribing:
             self._transcribing = False
             self._say(
@@ -840,6 +850,17 @@ class _Window(QWidget):
             # The window is already hidden and the worker is now finished, so
             # there is no thread left to be destroyed under a running loop.
             QApplication.quit()
+
+    def _let_sleep(self) -> None:
+        """Hand locking and sleeping back to the desktop once the work is done.
+
+        Called from the ``finished`` slots rather than the result slots, for
+        the same reason the worker state is cleared there: a thread that dies
+        without reporting would otherwise keep the machine awake for good.
+        """
+        if self._awake is not None:
+            self._awake.release()
+            self._awake = None
 
     def _refresh(self) -> None:
         """Bring every control into line with what the window is doing."""
@@ -904,6 +925,7 @@ class _Window(QWidget):
         if self._recorder is not None:
             self._recorder.stop()
             self._recorder.wait()
+        self._let_sleep()
         event.accept()
 
 

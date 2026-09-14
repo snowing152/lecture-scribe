@@ -113,6 +113,16 @@ Prefix them with `uv run`, or run `uv tool install --editable .` once to get a
 plain `scribe` on your `PATH` — editable, so `git pull` picks up changes
 without reinstalling.
 
+While a recording or a recognition runs, in the window or on the command line,
+the desktop is asked not to lock, turn the screen off or suspend — the same
+request a video player makes, through `org.freedesktop.ScreenSaver` on Linux and
+`SetThreadExecutionState` on Windows. Walk away from a long lecture and it is
+still recording when you come back. The request is handed back as soon as the
+work ends, and a crashed process lets go of it too. On Linux a short
+notification says so when it starts, if `notify-send` is installed. Where the
+desktop offers nothing of the kind, the work goes ahead and says the screen may
+lock; `scribe doctor` shows what, if anything, takes the request.
+
 <details open>
 <summary>
 The window
