@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 DESKTOP_ID = "lecture-scribe"
 """Basename of the desktop entry, and the app id the window reports.
@@ -179,7 +179,7 @@ def executable() -> Path:
     )
 
 
-def desktop_entry(target: Path, workdir: Path) -> str:
+def desktop_entry(target: PurePath, workdir: PurePath) -> str:
     """Render the contents of the ``.desktop`` file.
 
     Args:
@@ -204,7 +204,7 @@ def desktop_entry(target: Path, workdir: Path) -> str:
     )
 
 
-def _quote_exec(target: Path) -> str:
+def _quote_exec(target: PurePath) -> str:
     """Quote a program path for a desktop entry's ``Exec`` key.
 
     The key is not a plain string: it is split into words, a backslash keeps

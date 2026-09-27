@@ -1,12 +1,16 @@
 """Tests for the desktop menu entry."""
 
-from pathlib import Path
+from pathlib import PurePosixPath
 
 from lecture_scribe.launcher import desktop_entry
 
 
 def _entry(target: str = "/home/u/.local/bin/scribe-gui") -> str:
-    return desktop_entry(Path(target), Path("/home/u/Projects/lecture_helper"))
+    # A desktop entry only ever holds Linux paths; PurePosixPath keeps them
+    # that way when the tests run on Windows, where Path turns / into \.
+    return desktop_entry(
+        PurePosixPath(target), PurePosixPath("/home/u/Projects/lecture_helper")
+    )
 
 
 def test_desktop_entry_pins_the_working_directory() -> None:
