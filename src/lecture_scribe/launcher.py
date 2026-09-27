@@ -21,9 +21,23 @@ A Wayland compositor pairs a window with its menu entry by this name, so the
 two have to agree for the icon to show up in a task switcher.
 """
 
+APP_USER_MODEL_ID = "lecture-scribe"
+"""The id the window claims on Windows, where the taskbar groups by it.
+
+Without one the window counts as ``pythonw.exe``, since ``scribe-gui.exe`` is
+only a trampoline that starts Python, and the taskbar shows Python's icon.
+"""
+
+ICON = Path(__file__).parent / "lecture-scribe.svg"
+"""The icon, drawn once as a vector and used at every size."""
+
 _NAME = "lecture scribe"
 _COMMENT = "Record a lecture playing on this computer and transcribe it"
-_ICON_FILE = "lecture-scribe.svg"
+
+# A shortcut cannot point at an SVG, only at an .ico or at an executable's
+# resources, and the uv trampoline carries no icon. This one is rendered from
+# ICON at the sizes Explorer asks for; redraw it whenever the SVG changes.
+_WINDOWS_ICON = ICON.with_suffix(".ico")
 
 
 class LauncherError(Exception):
@@ -38,8 +52,8 @@ class Launcher:
         entry: The desktop entry or Start Menu shortcut itself.
         target: Executable the entry runs.
         workdir: Directory the window will start in.
-        icon: Icon file that was installed, or ``None`` on a platform that
-            takes the icon from the executable instead.
+        icon: Icon file the entry shows, or ``None`` when the package holds
+            none.
     """
 
     entry: Path
@@ -70,8 +84,11 @@ def install(workdir: Path) -> Launcher:
         raise LauncherError(f"cannot create {entry.parent}: {error}") from error
 
     if platform.system() == "Windows":
-        _write_shortcut(entry, target, workdir)
-        return Launcher(entry=entry, target=target, workdir=workdir, icon=None)
+        # Pointed at inside the package rather than copied out, as on Linux:
+        # Windows has no icon theme to install into.
+        icon = _WINDOWS_ICON if _WINDOWS_ICON.is_file() else None
+        _write_shortcut(entry, target, workdir, icon)
+        return Launcher(entry=entry, target=target, workdir=workdir, icon=icon)
 
     icon = _install_icon()
     try:
@@ -214,14 +231,13 @@ def _install_icon() -> Path | None:
     Raises:
         LauncherError: The icon could not be copied.
     """
-    source = Path(__file__).parent / _ICON_FILE
-    if not source.is_file():
+    if not ICON.is_file():
         return None
 
     destination = _icon_path()
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+        shutil.copyfile(ICON, destination)
     except OSError as error:
         raise LauncherError(f"cannot install the icon: {error}") from error
     return destination
@@ -240,7 +256,9 @@ def _data_home() -> Path:
     return Path(xdg) if xdg else Path.home() / ".local" / "share"
 
 
-def _write_shortcut(entry: Path, target: Path, workdir: Path) -> None:
+def _write_shortcut(
+    entry: Path, target: Path, workdir: Path, icon: Path | None
+) -> None:
     """Create a Start Menu shortcut through the Windows scripting host.
 
     PowerShell writes the shortcut rather than a COM binding, so that adding
@@ -251,6 +269,7 @@ def _write_shortcut(entry: Path, target: Path, workdir: Path) -> None:
         entry: Shortcut file to create.
         target: Executable the shortcut runs.
         workdir: Directory the shortcut starts it in.
+        icon: ``.ico`` the shortcut shows, or ``None`` for the target's own.
 
     Raises:
         LauncherError: PowerShell is missing or refused to write the file.
@@ -261,8 +280,10 @@ def _write_shortcut(entry: Path, target: Path, workdir: Path) -> None:
         f"$link.TargetPath = {_powershell_string(str(target))}; "
         f"$link.WorkingDirectory = {_powershell_string(str(workdir))}; "
         f"$link.Description = {_powershell_string(_COMMENT)}; "
-        "$link.Save()"
     )
+    if icon is not None:
+        script += f"$link.IconLocation = {_powershell_string(f'{icon},0')}; "
+    script += "$link.Save()"
     try:
         done = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],

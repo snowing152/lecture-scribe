@@ -10,6 +10,7 @@ same on Linux and on Windows, and the native styles differ too much in
 metrics and colour for one stylesheet to cover both.
 """
 
+import ctypes
 import math
 import sys
 import threading
@@ -21,6 +22,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QFont,
+    QIcon,
     QKeySequence,
     QPainter,
     QPaintEvent,
@@ -57,7 +59,7 @@ from lecture_scribe.audio_capture import (
 )
 from lecture_scribe.config import Config, ConfigError, load_config
 from lecture_scribe.format_text import format_timecode, render_transcript
-from lecture_scribe.launcher import DESKTOP_ID
+from lecture_scribe.launcher import APP_USER_MODEL_ID, DESKTOP_ID, ICON
 from lecture_scribe.transcribe import (
     Decoding,
     Transcription,
@@ -931,11 +933,18 @@ def run(config: Config) -> int:
     Returns:
         The process exit code.
     """
+    if sys.platform == "win32":
+        # Has to happen before the first window exists, or the taskbar has
+        # already filed it under pythonw.exe and shows Python's icon.
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+
     app = QApplication(sys.argv)
     app.setApplicationName("lecture-scribe")
     # Wayland pairs a window with its menu entry by this name, which is how
     # the window gets the icon `scribe launcher` installed.
     app.setDesktopFileName(DESKTOP_ID)
+    # Windows and X11 take the icon from the window itself.
+    app.setWindowIcon(QIcon(str(ICON)))
     app.setStyle("Fusion")
     app.setStyleSheet(_STYLESHEET)
 

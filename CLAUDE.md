@@ -156,6 +156,12 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 - Wayland pairs a window with its menu entry by name, not by process: the
   entry's `StartupWMClass` and `QApplication.setDesktopFileName` both say
   `launcher.DESKTOP_ID`, or the window appears without its icon.
+- **On Windows the window belongs to `pythonw.exe`, not to `scribe-gui.exe`.**
+  uv's `scribe-gui.exe` is a trampoline that starts Python and waits, so
+  without `SetCurrentProcessExplicitAppUserModelID` the taskbar files the
+  window under Python and shows Python's icon. A `.lnk` cannot take an SVG
+  and the trampoline carries no icon resource, hence the `.ico` beside the
+  SVG, rendered from it.
 - `Categories=` takes exactly one main category. `AudioVideo;Audio;Utility;`
   is valid but lists the window twice in the menu; `desktop-file-validate`
   reports it as a hint rather than an error.
@@ -221,5 +227,5 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | 3 | `format_text.py`: paragraphs, `[MM:SS]` timecodes, `>>>` markers | done |
 | 4 | `--then-text`, important-moment hotkey, free space check | in progress — free space check (`scribe doctor`) and `>>>` mark rendering (`format_text.render_transcript`, `marks=`) done; marking exists in the window (button, Ctrl+M) but not in the CLI; `--then-text` flag parses but is stubbed |
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
-| L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — written and verified on Linux; the Windows branch is unrun |
+| L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |
