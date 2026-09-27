@@ -18,6 +18,7 @@ from lecture_scribe.audio_capture import (
     course_slug,
     inspect_recording,
     lecture_dir,
+    recording_path,
     resolve_device,
 )
 
@@ -69,6 +70,12 @@ def test_second_lecture_the_same_day_gets_its_own_folder(tmp_path: Path) -> None
 
     (tmp_path / "2026-09-09_os-2").mkdir()
     assert lecture_dir(tmp_path, "os", when) == tmp_path / "2026-09-09_os-3"
+
+
+def test_recording_is_named_after_its_folder(tmp_path: Path) -> None:
+    folder = tmp_path / "2026-09-14_컴넷-2"
+
+    assert recording_path(folder) == folder / "2026-09-14_컴넷-2.wav"
 
 
 def test_course_names_survive_korean_and_spaces() -> None:

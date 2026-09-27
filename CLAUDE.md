@@ -53,6 +53,7 @@ config.py          config.toml -> frozen dataclasses
 cli.py             argument parsing, printing and wiring, nothing else
 gui.py             the desktop window (Qt), wiring and drawing, nothing else
 launcher.py        desktop menu entry, both platforms
+keep_awake.py      keep the desktop from locking or sleeping while working
 archive.py         SQLite FTS5 index (step 5, not written yet)
 ```
 
@@ -168,6 +169,25 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 - A `.lnk` is a binary format, so the Windows shortcut is written by
   PowerShell's `WScript.Shell` rather than by hand. That keeps a Start Menu
   entry from costing a dependency.
+- **Noctalia serves `org.freedesktop.ScreenSaver` and obeys it.** Its log
+  reads `idle behavior 'lock' suppressed (screensaver inhibit locks=1)`, and
+  the same for `screen-off` and `suspend`. The idle config on this machine
+  suspends after 25 minutes, which would end a recording or a CPU
+  transcription -- hence `keep_awake` around both, in both front ends.
+- **`UnInhibit` cannot be called from PySide6.** The cookie goes back as a
+  signed `i` where `u` is wanted, and QtDBus refuses numpy and ctypes
+  integers outright. `keep_awake` inhibits over a private named connection
+  and closes it to let go -- which is what the desktop also sees on
+  `kill -9`; Noctalia logs `cleared 1 inhibit(s) after client disconnect`.
+- `QDBusConnection.disconnectFromBus` closes nothing while a Python
+  `QDBusConnection` for that name is still alive: the inhibit stayed in force
+  until the process exited. Hence the `del bus`.
+- QtDBus works in the CLI with no `QCoreApplication` and no event loop.
+- **Notifications go through `notify-send`, not QtDBus.** Noctalia refuses
+  `Notify` from PySide6 with `Invalid arguments 'sisssava{sv}i' ... expecting
+  'susssasa{sv}i'`: the unsigned id goes out signed and the empty string array
+  as a variant array, and `QDBusInterface` does not convert them either.
+  `notify-send` 0.8.8 takes 7 ms, so it runs synchronously.
 
 ## Recognition settings that must not drift
 
@@ -228,4 +248,5 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | 4 | `--then-text`, important-moment hotkey, free space check | in progress — free space check (`scribe doctor`) and `>>>` mark rendering (`format_text.render_transcript`, `marks=`) done; marking exists in the window (button, Ctrl+M) but not in the CLI; `--then-text` flag parses but is stubbed |
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
+| A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |

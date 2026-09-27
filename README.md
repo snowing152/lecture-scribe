@@ -38,7 +38,7 @@ machine, and the only network request in the tool's life is downloading the
 speech model once.
 
 ```
-   system audio  ──▶  audio.wav  ──▶   segments   ──▶  transcript.txt
+   system audio  ──▶  <name>.wav ──▶   segments   ──▶  <name>.txt
      loopback          16 kHz          whisper
     scribe rec                       scribe text
                      └──────── scribe gui ────────┘
@@ -104,7 +104,7 @@ loaded there, so it is worth running from wherever you actually start the tool.
 |---|---|
 | `scribe doctor` | show devices, model and GPU; writes nothing |
 | `scribe rec --course os` | record system audio until Ctrl+C |
-| `scribe text audio.wav` | transcribe one or more recordings, writing `transcript.txt` |
+| `scribe text lecture.wav` | transcribe one or more recordings, writing a `.txt` beside each |
 | `scribe gui` | the same recording and transcribing in one window |
 | `scribe launcher` | put that window in this machine's application menu |
 | `scribe find "기말고사"` | search every transcript — *step 5* |
@@ -112,6 +112,16 @@ loaded there, so it is worth running from wherever you actually start the tool.
 Prefix them with `uv run`, or run `uv tool install --editable .` once to get a
 plain `scribe` on your `PATH` — editable, so `git pull` picks up changes
 without reinstalling.
+
+While a recording or a recognition runs, in the window or on the command line,
+the desktop is asked not to lock, turn the screen off or suspend — the same
+request a video player makes, through `org.freedesktop.ScreenSaver` on Linux and
+`SetThreadExecutionState` on Windows. Walk away from a long lecture and it is
+still recording when you come back. The request is handed back as soon as the
+work ends, and a crashed process lets go of it too. On Linux a short
+notification says so when it starts, if `notify-send` is installed. Where the
+desktop offers nothing of the kind, the work goes ahead and says the screen may
+lock; `scribe doctor` shows what, if anything, takes the request.
 
 <details open>
 <summary>
@@ -125,12 +135,12 @@ and loudness reads as brightness rather than colour.
 Type a course name, press **record**, and press **mark** (or `Ctrl+M`) at a
 moment worth finding again — those become the `>>>` paragraphs. **stop** closes
 the WAV, **transcribe** runs the model and shows the transcript in the pane; it
-is written to `transcript.txt` either way.
+is written beside the recording either way.
 
 **open** (or `Ctrl+O`) picks a recording made earlier instead — one from a
 previous session, or a WAV that never came from `scribe rec` at all. If a
-`transcript.txt` is already sitting beside it, the window shows that rather
-than decoding it again; pressing **transcribe** replaces it.
+transcript is already sitting beside it, the window shows that rather than
+decoding it again; pressing **transcribe** writes a new one.
 
 While recognition runs, the level meter becomes a progress bar and the
 recognised Korean streams into the pane a segment at a time, so you can start
@@ -139,7 +149,7 @@ reading long before the file is finished.
 Recording and recognition each run on their own thread, so the meter keeps
 moving and the window keeps responding. While a file is being recognised,
 **transcribe** turns into **stop**: recognition gives up at the end of the
-segment it is on and writes nothing, since half a lecture in `transcript.txt`
+segment it is on and writes nothing, since half a lecture in a transcript
 would read like a whole one. Closing the window during recognition asks first,
 then does the same.
 
@@ -205,15 +215,15 @@ Transcribe afterwards, on the same machine or a faster one, whenever
 convenient — recording and transcription never have to happen back to back:
 
 ```bash
-scribe text ~/lectures/2026-09-09_os/audio.wav
+scribe text ~/lectures/2026-09-09_os/2026-09-09_os.wav
 ```
 
 `text` takes more than one file and loads the model once for all of them, which
 is the way to catch up on a week of recordings in one go:
 
 ```bash
-scribe text ~/lectures/*/audio.wav
-scribe text --model large-v3 audio.wav      # override without touching config.toml
+scribe text ~/lectures/*/*.wav
+scribe text --model large-v3 lecture.wav      # override without touching config.toml
 ```
 
 `scribe gui` does both halves in one window, marks included. On the command
@@ -228,9 +238,15 @@ One lecture, one folder under `output.dir`:
 
 ```
 ~/lectures/2026-09-09_os/
-├── audio.wav        the recording, never deleted automatically
-└── transcript.txt   the thing to read
+├── 2026-09-09_os.wav   the recording, never deleted automatically
+└── 2026-09-09_os.txt   the thing to read
 ```
+
+Both files are named after the folder: the recording when it is made, the
+transcript when it is written. Rename the folder to the lecture's title before
+transcribing and the transcript takes the title too. The window still finds a
+transcript that kept an older name, including `transcript.txt` from before the
+files were named this way.
 
 A second lecture on the same subject and day goes to `2026-09-09_os-2`; nothing
 is ever written on top of an existing recording.

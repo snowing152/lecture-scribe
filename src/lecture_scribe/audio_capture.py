@@ -393,6 +393,21 @@ def lecture_dir(root: Path, course: str, when: datetime) -> Path:
     return candidate
 
 
+def recording_path(folder: Path) -> Path:
+    """Name the recording after the lecture folder it goes into.
+
+    A file called ``audio.wav`` says nothing once it is copied out of its
+    folder, attached somewhere or open beside another lecture's.
+
+    Args:
+        folder: The lecture folder, as picked by `lecture_dir`.
+
+    Returns:
+        ``<folder>/<folder name>.wav``.
+    """
+    return folder / f"{folder.name}.wav"
+
+
 def course_slug(course: str) -> str:
     """Turn a course name into one usable path component.
 

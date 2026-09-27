@@ -359,6 +359,43 @@ def transcribe(
     )
 
 
+def transcript_path(wav: Path) -> Path:
+    """Pick where the transcript of a recording is written.
+
+    Named after the folder as it is now rather than after the WAV, so a
+    recording from before files were named this way, still ``audio.wav``,
+    does not end up beside an ``audio.txt``.
+
+    Args:
+        wav: The recording being transcribed.
+
+    Returns:
+        ``<folder>/<folder name>.txt``.
+    """
+    return wav.parent / f"{wav.parent.name}.txt"
+
+
+def earlier_transcript(wav: Path) -> Path | None:
+    """Find a transcript already made from a recording, if there is one.
+
+    Args:
+        wav: The recording.
+
+    Returns:
+        The first of these that exists: the name `transcript_path` gives
+        today; the WAV's own name with ``.txt``, which is where a transcript
+        is after its folder was renamed, since both files carry the old
+        folder name; and ``transcript.txt``, the name every transcript had
+        before 2026-09-14. None when there is no transcript at all.
+    """
+    candidates = (
+        transcript_path(wav),
+        wav.with_suffix(".txt"),
+        wav.parent / "transcript.txt",
+    )
+    return next((path for path in candidates if path.is_file()), None)
+
+
 def _cublas_available() -> bool:
     """Whether the CUDA library CTranslate2 needs can be loaded.
 

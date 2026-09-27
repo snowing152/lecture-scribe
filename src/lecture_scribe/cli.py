@@ -20,6 +20,7 @@ from lecture_scribe.audio_capture import (
     lecture_dir,
     list_loopback_devices,
     record_loopback,
+    recording_path,
     resolve_device,
 )
 from lecture_scribe.config import (
@@ -30,6 +31,7 @@ from lecture_scribe.config import (
     merge_cli,
 )
 from lecture_scribe.format_text import render_transcript
+from lecture_scribe.keep_awake import awake_status, keep_awake
 from lecture_scribe.launcher import LauncherError
 from lecture_scribe.launcher import install as install_launcher
 from lecture_scribe.launcher import remove as remove_launcher
@@ -41,6 +43,7 @@ from lecture_scribe.transcribe import (
     load_model,
     model_status,
     transcribe,
+    transcript_path,
 )
 
 # Commands whose arguments are already fixed but whose behaviour arrives later.
@@ -224,11 +227,13 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     folder.mkdir(parents=True)
-    target = folder / "audio.wav"
+    target = recording_path(folder)
 
+    awake = keep_awake("recording a lecture")
     print(f"recording to {target}")
     _row("device", f"{device.name} (loopback)")
     _row("format", f"{config.audio.sample_rate} Hz mono, 16 bit")
+    _row("keep awake", _awake_line(awake.held, awake.detail))
     _row("stop", "Ctrl+C")
     print()
 
@@ -255,6 +260,8 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
         status.clear()
         print(f"audio error: {error}", file=sys.stderr)
         return 1
+    finally:
+        awake.release()
     status.clear()
 
     print(f"stopped after {_hms(recording.duration)}")
@@ -272,7 +279,7 @@ def _rec(config: Config, course: str, *, then_text: bool) -> int:
 
 
 def _text(config: Config, wavs: list[Path]) -> int:
-    """Transcribe one or more recordings, writing a readable transcript.txt.
+    """Transcribe one or more recordings, writing a readable transcript of each.
 
     Paths are checked before the model is loaded: large-v3 can take a while
     to load or download, and a typo in a filename should fail in an instant
@@ -306,6 +313,25 @@ def _text(config: Config, wavs: list[Path]) -> int:
     if not existing:
         return 1
 
+    # Loading the model, and on a first run downloading it, is part of the
+    # wait: an idle suspend during it would end the batch just the same.
+    with keep_awake("transcribing lectures") as awake:
+        if not awake.held:
+            print(f"note: the desktop may lock or suspend meanwhile, {awake.detail}")
+        return _transcribe_all(config, existing, failures)
+
+
+def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
+    """Load the model once, then transcribe each recording in turn.
+
+    Args:
+        config: Effective configuration, command line overrides applied.
+        wavs: Recordings already known to exist.
+        failures: Files already reported as missing.
+
+    Returns:
+        The process exit code: 0 if every file transcribed, 1 if any failed.
+    """
     print(f"loading {config.asr.model} ({compute_type(config.asr.gpu)}) ...")
     try:
         model = load_model(config.asr.model, gpu=config.asr.gpu)
@@ -324,7 +350,7 @@ def _text(config: Config, wavs: list[Path]) -> int:
     stop = threading.Event()
     _install_stop_handler(stop, absorb_repeats=False)
 
-    for wav in existing:
+    for wav in wavs:
         print(f"\n{wav}")
         # The decoder scans the whole file for speech before it yields the
         # first segment -- 21 seconds on an 81 minute lecture -- and the
@@ -352,13 +378,13 @@ def _text(config: Config, wavs: list[Path]) -> int:
         status.clear()
 
         if result.interrupted is not None:
-            # Half a lecture written to transcript.txt would read as a whole
+            # Half a lecture written to a transcript would read as a whole
             # one, and would sit on top of a complete transcript from an
             # earlier run. The partial segments are dropped instead.
             print(f"  {result.interrupted}.", file=sys.stderr)
             return 1
 
-        text_path = wav.parent / "transcript.txt"
+        text_path = transcript_path(wav)
         text_path.write_text(
             render_transcript(
                 result.segments,
@@ -534,6 +560,8 @@ def _doctor(config: Config) -> int:
         "config",
         str(config.source) if config.source else f"defaults, no ./{CONFIG_FILENAME}",
     )
+    awake = awake_status()
+    _row("keep awake", _awake_line(awake.available, awake.detail))
 
     print("\naudio")
     problems += _audio_report(config)
@@ -625,6 +653,11 @@ def _output_report(config: Config) -> None:
     free_gb = shutil.disk_usage(anchor).free / 1_000_000_000
     # An hour of 16 kHz mono PCM is about 115 MB, so this is only ever a sanity check.
     _row("free space", f"{free_gb:.1f} GB")
+
+
+def _awake_line(held: bool, detail: str) -> str:
+    """Say whether the desktop is kept from locking, and by what or why not."""
+    return f"yes, via {detail}" if held else f"no, the desktop may lock: {detail}"
 
 
 def _row(label: str, value: str) -> None:
