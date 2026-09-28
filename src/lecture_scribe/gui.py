@@ -72,6 +72,7 @@ from lecture_scribe.transcribe import (
     transcribe,
     transcript_path,
 )
+from lecture_scribe.upload import Upload, announce, push_transcript
 
 _FLOOR_DBFS = -60.0
 """Level shown as an empty meter; below this a lecture is inaudible anyway."""
@@ -229,6 +230,24 @@ class _RecordWorker(QThread):
         self.progressed.emit(progress)
 
 
+def _with_upload(message: str, upload: Upload | None) -> tuple[str, bool]:
+    """Add the outcome of an upload to the status line.
+
+    Args:
+        message: What recognition reported.
+        upload: The upload, or ``None`` when upload is off.
+
+    Returns:
+        The line, and whether it needs attention. A failed upload does: the
+        transcript is safe, but the copy the user expects on Drive is not.
+    """
+    if upload is None:
+        return message, False
+    if upload.ok:
+        return f"{message} · uploaded to {upload.destination}", False
+    return f"{message} · not uploaded, {upload.error}", True
+
+
 class _TranscribeWorker(QThread):
     """Loads the model and transcribes one recording off the GUI thread.
 
@@ -238,7 +257,8 @@ class _TranscribeWorker(QThread):
 
     staged = Signal(str)
     progressed = Signal(Decoding)
-    transcribed = Signal(Path, str, Transcription)
+    # The last is an Upload, or None when upload is off; Signal has no Optional.
+    transcribed = Signal(Path, str, Transcription, object)
     stopped = Signal(str)
     failed = Signal(str)
 
@@ -311,7 +331,16 @@ class _TranscribeWorker(QThread):
         except OSError as error:
             self.failed.emit(f"cannot write {path}: {error}")
             return
-        self.transcribed.emit(path, text, result)
+
+        # Uploaded before the result is reported rather than after: the
+        # window frees its buttons on that report, and a second transcription
+        # started meanwhile would replace this thread while it still runs.
+        upload: Upload | None = None
+        if self._config.upload.enabled:
+            self.staged.emit(f"uploading to {self._config.upload.remote} ...")
+            upload = push_transcript(path, self._config.output.dir, self._config.upload)
+            announce(upload)
+        self.transcribed.emit(path, text, result, upload)
 
 
 class _Combo(QComboBox):
@@ -803,8 +832,10 @@ class _Window(QWidget):
             f"{format_timecode(decoding.position)} {decoding.text}"
         )
 
-    def _on_transcribed(self, path: Path, text: str, result: Transcription) -> None:
-        """Show the finished transcript and how long decoding took."""
+    def _on_transcribed(
+        self, path: Path, text: str, result: Transcription, upload: Upload | None
+    ) -> None:
+        """Show the finished transcript, how long decoding took, and the upload."""
         self._transcribing = False
         self._meter.reset()
         self._clock.setText(_clock(result.audio_duration))
@@ -814,10 +845,12 @@ class _Window(QWidget):
             if result.audio_duration > 0
             else 0.0
         )
-        self._say(
+        message = (
             f"wrote {path} · {_plural(len(result.segments), 'segment')} · "
             f"{_clock(result.decode_seconds)} ({ratio:.2f}x audio length)"
         )
+        line, problem = _with_upload(message, upload)
+        self._say(line, problem=problem)
         self._refresh()
 
     def _on_transcribe_stopped(self, message: str) -> None:
