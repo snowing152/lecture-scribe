@@ -45,6 +45,7 @@ from lecture_scribe.transcribe import (
     transcribe,
     transcript_path,
 )
+from lecture_scribe.upload import announce, push_transcript, upload_status
 
 # Commands whose arguments are already fixed but whose behaviour arrives later.
 _PENDING = {"find": 5}
@@ -411,6 +412,8 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
             f"{_hms(result.decode_seconds)} ({ratio:.2f}x audio length)",
         )
         _row("wrote", text_path.name)
+        if config.upload.enabled:
+            _upload(config, text_path, status)
 
     return 1 if failures else 0
 
@@ -439,6 +442,22 @@ def _install_stop_handler(
     signal.signal(signal.SIGINT, handle)
     # A logout or a plain `kill` should end the lecture the same way.
     signal.signal(signal.SIGTERM, handle)
+
+
+def _upload(config: Config, transcript: Path, status: "_StatusLine") -> None:
+    """Copy a written transcript to the remote and say how it went.
+
+    A failure is a warning, not an error: the transcript is safe on disk and
+    the exit code stays what recognition made it.
+    """
+    status.draw(f"  uploading to {config.upload.remote} ...")
+    upload = push_transcript(transcript, config.output.dir, config.upload)
+    status.clear()
+    if upload.ok:
+        _row("uploaded", upload.destination)
+        announce(upload)
+    else:
+        print(f"  warning: not uploaded, {upload.error}", file=sys.stderr)
 
 
 class _StatusLine:
@@ -572,6 +591,9 @@ def _doctor(config: Config) -> int:
     print("\noutput")
     _output_report(config)
 
+    print("\nupload")
+    problems += _upload_report(config)
+
     if problems:
         print()
         for problem in problems:
@@ -653,6 +675,23 @@ def _output_report(config: Config) -> None:
     free_gb = shutil.disk_usage(anchor).free / 1_000_000_000
     # An hour of 16 kHz mono PCM is about 115 MB, so this is only ever a sanity check.
     _row("free space", f"{free_gb:.1f} GB")
+
+
+def _upload_report(config: Config) -> list[str]:
+    """Print the upload section of the doctor report and return any problems."""
+    status = upload_status(config.upload)
+    if status.enabled:
+        _row("remote", config.upload.remote)
+    else:
+        _row("remote", "off, no upload.remote in config.toml")
+    _row("rclone", status.rclone or "not found")
+    if status.remote_found is not None:
+        name = config.upload.remote.split(":", 1)[0]
+        _row(
+            "sign-in",
+            f"remote '{name}' {'found' if status.remote_found else 'MISSING'}",
+        )
+    return [status.problem] if status.problem else []
 
 
 def _awake_line(held: bool, detail: str) -> str:

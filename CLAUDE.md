@@ -36,6 +36,12 @@ one core.
   exception, agreed on 2026-09-10: `nvidia-cublas-cu12` as the optional
   `cuda` extra, never a plain dependency -- recording a lecture needs none
   of it and it costs a gigabyte.
+- **Transcripts reach Google Drive through the external `rclone` program**,
+  agreed on 2026-09-28, the same way notifications use `notify-send`: no
+  Python dependency, and the OAuth token lives in rclone's own config, never
+  in this project. Only the `.txt` is uploaded, never the WAV, and only when
+  `[upload]` names a remote. A failed upload is a warning, never an error:
+  the transcript is already safe on disk.
 - No abstractions written for a future that has not arrived: no plugins, no
   factories, no base classes with a single implementation.
 - No blanket `try/except` to keep things from crashing. Catch named
@@ -54,6 +60,7 @@ cli.py             argument parsing, printing and wiring, nothing else
 gui.py             the desktop window (Qt), wiring and drawing, nothing else
 launcher.py        desktop menu entry, both platforms
 keep_awake.py      keep the desktop from locking or sleeping while working
+upload.py          transcript -> Google Drive via rclone, plus doctor probe
 archive.py         SQLite FTS5 index (step 5, not written yet)
 ```
 
@@ -182,6 +189,26 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   'susssasa{sv}i'`: the unsigned id goes out signed and the empty string array
   as a variant array, and `QDBusInterface` does not convert them either.
   `notify-send` 0.8.8 takes 7 ms, so it runs synchronously.
+- **`upload.remote` must contain a colon.** Without one rclone reads the
+  destination as a local path. Measured: `rclone copyto x.txt
+  gdrive/Lectures/x.txt` exits 0 and leaves `./gdrive/Lectures/x.txt` in the
+  current directory. `config.py` refuses such a remote for that reason.
+- **The rclone remote uses scope `drive.file` and a client ID of the user's
+  own.** rclone's shared client ID is being retired during 2026 (its own
+  docs, and its config prompt says so). The Google app is published, not
+  left in testing, where the sign-in expires after seven days.
+- **With `drive.file` rclone sees only what it created.** Measured:
+  `rclone lsd gdrive:` listed nothing on a Drive holding 67 GB, until
+  `rclone mkdir gdrive:Lectures`. A folder made by hand in the browser is
+  therefore invisible to it, and an upload would create a second folder of
+  the same name beside it.
+- `rclone copyto` creates every missing folder on the way to the
+  destination, and Hangul names and contents arrive intact (read back with
+  `rclone cat`).
+- **The window uploads before it reports the transcript, not after.** The
+  `transcribed` slot frees the buttons; a second transcription started
+  while the first thread still uploaded would replace a running `QThread`,
+  which aborts the process.
 
 ## Recognition settings that must not drift
 
@@ -243,4 +270,5 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — written and verified on Linux; the Windows branch is unrun |
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
+| U | `upload.py`: transcripts to Google Drive through rclone, `[upload]` in config, doctor section, notification | done — verified on Linux, CLI and window; the Windows branch is unrun |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |

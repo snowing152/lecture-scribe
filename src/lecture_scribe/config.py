@@ -78,6 +78,25 @@ class OutputConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class UploadConfig:
+    """Copying finished transcripts to cloud storage through rclone.
+
+    Attributes:
+        remote: rclone destination as ``<remote>:<folder>``, such as
+            ``"gdrive:Lectures"``. Empty turns upload off.
+        timeout: Seconds one upload may take before it is given up.
+    """
+
+    remote: str = ""
+    timeout: float = 120.0
+
+    @property
+    def enabled(self) -> bool:
+        """Whether transcripts are uploaded at all."""
+        return self.remote != ""
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     """The complete effective configuration.
 
@@ -85,12 +104,14 @@ class Config:
         audio: Capture settings.
         asr: Recognition settings.
         output: Result location and transcript shape.
+        upload: Where finished transcripts are copied, if anywhere.
         source: File the settings were read from, or ``None`` for defaults.
     """
 
     audio: AudioConfig = AudioConfig()
     asr: AsrConfig = AsrConfig()
     output: OutputConfig = OutputConfig()
+    upload: UploadConfig = UploadConfig()
     source: Path | None = None
 
 
@@ -120,12 +141,13 @@ def load_config(path: Path | None = None) -> Config:
     except OSError as error:
         raise ConfigError(f"cannot read {config_path}: {error}") from error
 
-    sections = ("audio", "asr", "output")
+    sections = ("audio", "asr", "output", "upload")
     _reject_unknown("config.toml", raw, sections)
     return Config(
         audio=_audio(_section(raw, "audio")),
         asr=_asr(_section(raw, "asr")),
         output=_output(_section(raw, "output")),
+        upload=_upload(_section(raw, "upload")),
         source=config_path,
     )
 
@@ -197,6 +219,23 @@ def _output(raw: Mapping[str, Any]) -> OutputConfig:
         ),
         paragraph_max=_float("output", raw, "paragraph_max", default.paragraph_max),
     )
+
+
+def _upload(raw: Mapping[str, Any]) -> UploadConfig:
+    """Build the ``[upload]`` section."""
+    _reject_unknown("upload", raw, _names(UploadConfig))
+    default = UploadConfig()
+    remote = _str("upload", raw, "remote", default.remote)
+    # Without a colon rclone takes the destination for a local path and
+    # "uploads" into a folder named after it, reporting success.
+    if remote and ":" not in remote:
+        raise ConfigError(
+            f'upload.remote must look like "<remote>:<folder>", got "{remote}"'
+        )
+    timeout = _float("upload", raw, "timeout", default.timeout)
+    if timeout <= 0:
+        raise ConfigError(f"upload.timeout must be positive, got {timeout}")
+    return UploadConfig(remote=remote, timeout=timeout)
 
 
 def _names(cls: type) -> tuple[str, ...]:

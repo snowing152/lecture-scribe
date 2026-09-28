@@ -112,3 +112,32 @@ def test_section_must_be_a_table(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match=r"\[audio\] must be a table"):
         load_config(path)
+
+
+def test_upload_is_off_by_default(tmp_path: Path) -> None:
+    assert load_config(tmp_path / "missing.toml").upload.enabled is False
+
+
+def test_upload_section_is_read(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[upload]\nremote = "gdrive:Lectures"\ntimeout = 30\n')
+
+    upload = load_config(path).upload
+
+    assert upload.enabled is True
+    assert upload.remote == "gdrive:Lectures"
+    assert upload.timeout == pytest.approx(30.0)
+
+
+def test_upload_remote_without_a_colon_is_rejected(tmp_path: Path) -> None:
+    # rclone would read "gdrive" as a local directory and copy into it.
+    path = _write(tmp_path, '[upload]\nremote = "gdrive"\n')
+
+    with pytest.raises(ConfigError, match="<remote>:<folder>"):
+        load_config(path)
+
+
+def test_upload_timeout_must_be_positive(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[upload]\nremote = "gdrive:x"\ntimeout = 0\n')
+
+    with pytest.raises(ConfigError, match="positive"):
+        load_config(path)

@@ -14,3 +14,8 @@ dir = "~/lectures"
 paragraph_gap = 1.2      # seconds of pause that break a paragraph
 paragraph_target = 90    # ... and past this long, break at the next sentence
 paragraph_max = 180      # ... and past this long, break at the next segment
+
+# Optional: copy each transcript to Google Drive with rclone; see the README.
+# [upload]
+# remote = "gdrive:Lectures"   # rclone remote and folder
+# timeout = 120                # seconds one upload may take

@@ -271,6 +271,59 @@ segment boundary, which is the only place a paragraph can be cut. Past an hour
 every timecode is written `[0:12:30]` rather than `[12:30]`, so the text beside
 them keeps one left edge all the way down the file.
 
+## Copying transcripts to Google Drive
+
+Optional, and off until `config.toml` says otherwise. After a transcript is
+written, from the command line or the window alike, the `.txt` is copied to
+Google Drive by [rclone](https://rclone.org). The recording never leaves the
+machine. Drive keeps the same folders as `output.dir`:
+
+```
+~/lectures/Computer_Network/2026-09-28_컴넷/2026-09-28_컴넷.txt
+  -> gdrive:Lectures/Computer_Network/2026-09-28_컴넷/2026-09-28_컴넷.txt
+```
+
+Transcribing a lecture again replaces its copy on Drive. A successful upload
+shows a small notification; a failed one is a warning with the `rclone copyto`
+command that retries it, and the transcript on disk is untouched either way.
+
+<details>
+<summary>One-time setup</summary> <br />
+
+rclone's shared Google client ID is being retired during 2026, so the sign-in
+uses a client ID of your own. It is free and takes ten minutes.
+
+1. Install rclone: `sudo pacman -S rclone`, or see
+   [rclone.org/install](https://rclone.org/install/).
+2. In the [Google Cloud Console](https://console.cloud.google.com), create a
+   project and enable the **Google Drive API** for it.
+3. Under **Google Auth Platform**, set up the consent screen: audience
+   **External**, your address as the support email.
+4. **Data Access**: add the scope `.../auth/drive.file` and no other.
+5. **Audience → Test users**: add yourself.
+6. **Clients → Create client**, type **Desktop app**. Keep the client ID and
+   secret; the secret is a password, keep it out of chats and repositories.
+7. **Audience → Publish app**. An app left in testing loses its sign-in
+   after seven days, and uploads would quietly stop every week.
+8. `rclone config`: new remote `gdrive`, storage `drive`, your client ID and
+   secret, scope `3` (`drive.file`), defaults for the rest. Google warns that
+   the app is not verified; it is your own, so **Advanced → Go to …**.
+9. Turn the upload on in `config.toml`:
+
+   ```toml
+   [upload]
+   remote = "gdrive:Lectures"
+   ```
+
+`scribe doctor` then shows `remote 'gdrive' found`.
+
+With `drive.file`, rclone sees only what it created itself. Folders under
+`Lectures` are made by the upload; one made by hand in the browser is
+invisible to rclone, which would create a second folder of the same name
+beside it. Renaming, moving and deleting uploaded files is fine.
+
+</details>
+
 ## Configuration
 
 `config.toml` next to where you run the tool, all of it optional:
@@ -288,6 +341,8 @@ them keeps one left edge all the way down the file.
 | `output.paragraph_gap` | `1.2` | seconds of pause that start a paragraph |
 | `output.paragraph_target` | `90` | seconds after which a paragraph ends at the next sentence |
 | `output.paragraph_max` | `180` | seconds after which a paragraph ends at the next segment, sentence or not; `0` turns either off |
+| `upload.remote` | `""` | rclone destination such as `"gdrive:Lectures"`; empty turns upload off |
+| `upload.timeout` | `120` | seconds one upload may take |
 
 A typo in a key is an error, not a silently ignored line.
 
@@ -351,6 +406,7 @@ when one is written, and why tkinter could not be the GUI.
 | 4 | `--then-text`, important-moment hotkey on the command line | in progress |
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done |
+| U | `upload.py`: transcripts to Google Drive through rclone | done |
 | 5 | `archive.py`, SQLite FTS5, `scribe find` | |
 
 ## License
