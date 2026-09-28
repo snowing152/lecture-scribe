@@ -77,8 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "rec":
         device: str | None = args.device
         course: str = args.course
-        then_text: bool = args.then_text
-        return _rec(merge_cli(config, device=device), course, then_text=then_text)
+        return _rec(merge_cli(config, device=device), course)
     if command == "text":
         wavs: list[Path] = args.wav
         model: str | None = args.model
@@ -107,7 +106,6 @@ def _build_parser() -> argparse.ArgumentParser:
     rec.add_argument(
         "--course", required=True, help="subject name, used in the folder name"
     )
-    rec.add_argument("--then-text", action="store_true", help="transcribe once stopped")
     rec.add_argument("--device", help="substring of the output device to record")
 
     text = commands.add_parser("text", help="transcribe one or more recordings")
@@ -202,20 +200,16 @@ def _launcher(*, remove: bool) -> int:
     return 0
 
 
-def _rec(config: Config, course: str, *, then_text: bool) -> int:
+def _rec(config: Config, course: str) -> int:
     """Record system audio into a fresh lecture folder until Ctrl+C.
 
     Args:
         config: Effective configuration, command line overrides applied.
         course: Subject name, used for the folder name.
-        then_text: Whether transcription was asked for afterwards.
 
     Returns:
         The process exit code.
     """
-    if then_text:
-        print("note: --then-text is not wired up yet, it arrives in step 4\n")
-
     try:
         device = resolve_device(list_loopback_devices(), config.audio.device)
     except AudioDeviceError as error:

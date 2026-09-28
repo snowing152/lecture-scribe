@@ -48,6 +48,11 @@ one core.
   exceptions and say what to do next.
 - Capture and recognition must stay runnable independently: recording on a
   laptop without the model installed, transcribing later or elsewhere.
+- **No search index**, dropped on 2026-09-28. The transcripts are plain
+  `.txt` and `grep` finds a word with its timecode in 6 ms across 39 of
+  them. SQLite FTS5 would search Korean worse than that: its tokenizer
+  splits on spaces, so `프로토콜의` is not `프로토콜`, and the trigram
+  tokenizer needs three characters where most words here have two.
 
 ## Layout
 
@@ -61,7 +66,6 @@ gui.py             the desktop window (Qt), wiring and drawing, nothing else
 launcher.py        desktop menu entry, both platforms
 keep_awake.py      keep the desktop from locking or sleeping while working
 upload.py          transcript -> Google Drive via rclone, plus doctor probe
-archive.py         SQLite FTS5 index (step 5, not written yet)
 ```
 
 `format_text.py` never touches the disk. Neither `cli.py` nor `gui.py` holds
@@ -272,9 +276,7 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | 1 | `audio_capture.py`, `scribe rec` | done |
 | 2 | `transcribe.py`, `scribe text`, flat output | done |
 | 3 | `format_text.py`: paragraphs, `[MM:SS]` timecodes, `>>>` markers | done |
-| 4 | `--then-text`, important-moment hotkey, free space check | in progress — free space check (`scribe doctor`) and `>>>` mark rendering (`format_text.render_transcript`, `marks=`) done; marking exists in the window (button, Ctrl+M) but not in the CLI; `--then-text` flag parses but is stubbed |
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | U | `upload.py`: transcripts to Google Drive through rclone, `[upload]` in config, doctor section, notification | done — verified on Linux, CLI and window; the Windows branch is unrun |
-| 5 | `archive.py`, SQLite FTS5, `scribe find` | |

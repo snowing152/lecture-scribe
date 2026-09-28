@@ -107,7 +107,6 @@ loaded there, so it is worth running from wherever you actually start the tool.
 | `scribe text lecture.wav` | transcribe one or more recordings, writing a `.txt` beside each |
 | `scribe gui` | the same recording and transcribing in one window |
 | `scribe launcher` | put that window in this machine's application menu |
-| `scribe find "기말고사"` | search every transcript — *step 5* |
 
 Prefix them with `uv run`, or run `uv tool install --editable .` once to get a
 plain `scribe` on your `PATH` — editable, so `git pull` picks up changes
@@ -227,8 +226,7 @@ scribe text --model large-v3 lecture.wav      # override without touching config
 ```
 
 `scribe gui` does both halves in one window, marks included. On the command
-line they stay two separate commands: `rec --then-text` and the
-important-moment hotkey are not wired up yet.
+line they are two separate commands, and marks exist only in the window.
 
 </details>
 
@@ -403,11 +401,10 @@ when one is written, and why tkinter could not be the GUI.
 | 1 | `audio_capture.py`, `scribe rec` | done |
 | 2 | `transcribe.py`, `scribe text` | done |
 | 3 | `format_text.py`: paragraphs, timecodes, `>>>` markers | done |
-| 4 | `--then-text`, important-moment hotkey on the command line | in progress |
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done |
+| A | `keep_awake.py`: no lock or sleep while recording or transcribing | done |
 | U | `upload.py`: transcripts to Google Drive through rclone | done |
-| 5 | `archive.py`, SQLite FTS5, `scribe find` | |
 
 ## License
 
