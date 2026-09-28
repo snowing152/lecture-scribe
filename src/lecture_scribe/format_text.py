@@ -1,9 +1,10 @@
 """Turning recognised segments into the readable transcript.
 
-Everything here is pure: it takes segments and returns a string, and never
-touches the disk.
+Everything here is pure: it takes segments and returns a string, or takes
+that string and reads it back, and never touches the disk.
 """
 
+import re
 import textwrap
 from bisect import bisect_right
 from collections.abc import Sequence
@@ -19,6 +20,27 @@ _AN_HOUR = 3600.0
 # Whisper punctuates Korean with the ASCII marks: over four measured lectures
 # no segment ended on a full width one.
 _SENTENCE_ENDS = (".", "?", "!")
+
+_MARKER = ">>> "
+# How a rendered paragraph opens: an optional marker, then the timecode.
+_OPENING = re.compile(rf"({re.escape(_MARKER)})?\[((?:\d+:)?\d\d:\d\d)\] ")
+
+
+@dataclass(frozen=True, slots=True)
+class Passage:
+    """One paragraph of a transcript, read back from the text on disk.
+
+    Attributes:
+        timecode: Where the paragraph starts, as written but without the
+            brackets, such as ``12:30``. Empty for a block that has none,
+            such as ``(no speech recognised)`` or a line added by hand.
+        text: The paragraph unwrapped onto one line.
+        marked: Whether it was flagged with ``>>>`` during the lecture.
+    """
+
+    timecode: str
+    text: str
+    marked: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +115,44 @@ def render_transcript(
         for index, paragraph in enumerate(paragraphs)
     )
     return f"{header}\n{body}\n"
+
+
+def read_transcript(text: str) -> tuple[str, list[Passage]]:
+    """Split a transcript back into its header and paragraphs.
+
+    Works from the text rather than from segments, because a transcript
+    opened from disk has none behind it. Anything that does not look like a
+    rendered paragraph is kept as a passage without a timecode rather than
+    dropped, so a transcript edited by hand still shows whole.
+
+    Args:
+        text: A transcript as :func:`render_transcript` writes it.
+
+    Returns:
+        The header line, empty when the first block is already a paragraph,
+        and the paragraphs in order.
+    """
+    blocks = [block for block in re.split(r"\n\s*\n", text.strip()) if block]
+    header = ""
+    if blocks and not _OPENING.match(blocks[0]):
+        header = " ".join(line.strip() for line in blocks.pop(0).splitlines())
+
+    passages = []
+    for block in blocks:
+        # The wrap broke lines at spaces only, so a single space rejoins them.
+        joined = " ".join(line.strip() for line in block.splitlines())
+        opening = _OPENING.match(joined)
+        if opening is None:
+            passages.append(Passage(timecode="", text=joined, marked=False))
+            continue
+        passages.append(
+            Passage(
+                timecode=opening.group(2),
+                text=joined[opening.end() :],
+                marked=opening.group(1) is not None,
+            )
+        )
+    return header, passages
 
 
 def format_timecode(seconds: float, *, with_hour: bool = False) -> str:
@@ -201,7 +261,7 @@ def _ends_a_sentence(text: str) -> bool:
 
 def _render_paragraph(paragraph: _Paragraph, *, marked: bool, with_hour: bool) -> str:
     """Wrap one paragraph, adding its timecode and marker prefix."""
-    lead = ">>> " if marked else ""
+    lead = _MARKER if marked else ""
     prefix = f"{lead}{format_timecode(paragraph.start, with_hour=with_hour)} "
     return textwrap.fill(
         paragraph.text,

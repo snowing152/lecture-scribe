@@ -11,23 +11,28 @@ metrics and colour for one stylesheet to cover both.
 """
 
 import ctypes
+import html
 import math
 import sys
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
+from PySide6.QtCore import QMimeData, QPointF, QRectF, QSize, Qt, QThread, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QFont,
     QIcon,
     QKeySequence,
+    QLinearGradient,
     QPainter,
     QPaintEvent,
+    QPixmap,
     QPolygonF,
     QShortcut,
+    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -39,8 +44,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
+    QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -59,7 +67,12 @@ from lecture_scribe.audio_capture import (
     resolve_device,
 )
 from lecture_scribe.config import Config, ConfigError, load_config
-from lecture_scribe.format_text import format_timecode, render_transcript
+from lecture_scribe.format_text import (
+    Passage,
+    format_timecode,
+    read_transcript,
+    render_transcript,
+)
 from lecture_scribe.keep_awake import Inhibition, keep_awake
 from lecture_scribe.launcher import APP_USER_MODEL_ID, DESKTOP_ID, ICON
 from lecture_scribe.transcribe import (
@@ -73,6 +86,11 @@ from lecture_scribe.transcribe import (
     transcript_path,
 )
 from lecture_scribe.upload import Upload, announce, push_transcript
+
+_GLYPH = 10
+"""Side of a button's painted icon, in logical pixels."""
+_GLYPH_GAP = 6
+"""Space between the icon and the label; Qt's own is a cramped 4 px under Fusion."""
 
 _FLOOR_DBFS = -60.0
 """Level shown as an empty meter; below this a lecture is inaudible anyway."""
@@ -97,71 +115,108 @@ _MONO_FAMILIES = (
     "monospace",
 )
 
-_BG = "#101010"
-_SURFACE = "#171717"
-_LINE = "#262626"
-_TEXT = "#e8e8e8"
-_MUTED = "#7a7a7a"
-_FAINT = "#5f5f5f"
+# Three stacked surfaces instead of outlines: depth comes from how light a
+# panel is, so borders are left for focus and for what is switched off. The
+# greys lean faintly cool, which keeps them from reading as unconsidered.
+_BG = "#0f0f11"
+_SURFACE = "#18181b"
+_RAISED = "#232327"
+_HOVER = "#2d2d32"
+_LINE = "#2a2a2f"
+_FOCUS = "#55555e"
+_TEXT = "#ececee"
+_MUTED = "#8c8c94"
+_FAINT = "#5a5a62"
+# Colour is kept for meaning, never decoration: red for capturing audio,
+# amber for a mark, and a lighter red for anything that needs attention.
+_LIVE = "#ff5a4f"
+_MARK = "#f5b83d"
+_MARK_WASH = "#272012"
+"""A marked paragraph's background: amber, faint enough to read through."""
+_PROBLEM = "#ff8a80"
 
 _STYLESHEET = f"""
 QWidget {{ background: {_BG}; color: {_TEXT}; }}
 QLabel {{ background: transparent; }}
 QLabel#caption {{ color: {_FAINT}; }}
+QLabel#title {{ color: {_TEXT}; }}
 QLabel#clock {{ color: {_TEXT}; }}
 QLabel#levels {{ color: {_MUTED}; }}
 QLabel#status {{ color: {_MUTED}; }}
-QLabel#status[problem="true"] {{ color: {_TEXT}; }}
+QLabel#status[problem="true"] {{ color: {_PROBLEM}; }}
 
 QLineEdit, QComboBox {{
     background: {_SURFACE};
-    border: 1px solid {_LINE};
-    border-radius: 2px;
-    padding: 7px 10px;
-    selection-background-color: #3a3a3a;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 8px 12px;
+    selection-background-color: {_HOVER};
     selection-color: {_TEXT};
 }}
-QLineEdit:focus, QComboBox:focus {{ border-color: #4e4e4e; }}
-QLineEdit:disabled, QComboBox:disabled {{ color: {_FAINT}; }}
-QComboBox::drop-down {{ border: none; width: 26px; }}
+QLineEdit:hover, QComboBox:hover {{ border-color: {_LINE}; }}
+QLineEdit:focus, QComboBox:focus {{ border-color: {_FOCUS}; }}
+QLineEdit:disabled, QComboBox:disabled {{
+    color: {_FAINT}; background: transparent; border-color: {_LINE};
+}}
+QComboBox::drop-down {{ border: none; width: 30px; }}
 QComboBox QAbstractItemView {{
-    background: {_SURFACE};
+    background: {_RAISED};
     border: 1px solid {_LINE};
-    selection-background-color: #2c2c2c;
+    padding: 4px;
+    selection-background-color: {_HOVER};
     outline: none;
 }}
 
 QPushButton {{
-    background: transparent;
-    border: 1px solid #333333;
-    border-radius: 2px;
-    padding: 9px 22px;
-    color: #d2d2d2;
+    background: {_RAISED};
+    border: 1px solid transparent;
+    border-radius: 16px;
+    padding: 8px 20px;
+    color: {_TEXT};
+    font-weight: 500;
 }}
-QPushButton:hover {{ border-color: #5c5c5c; color: #ffffff; }}
-QPushButton:pressed {{ background: #1c1c1c; }}
-QPushButton:disabled {{ color: #3c3c3c; border-color: #212121; }}
-QPushButton#primary {{ border-color: #585858; color: #ffffff; }}
-QPushButton#primary:disabled {{ color: #3c3c3c; border-color: #212121; }}
+QPushButton:hover {{ background: {_HOVER}; }}
+QPushButton:pressed {{ background: {_SURFACE}; }}
+QPushButton:focus {{ border-color: {_FOCUS}; }}
+QPushButton:disabled {{
+    background: transparent; border-color: {_LINE}; color: {_FAINT};
+}}
+QPushButton#primary {{ background: {_TEXT}; color: {_BG}; }}
+QPushButton#primary:hover {{ background: #ffffff; }}
+QPushButton#primary:pressed {{ background: #c8c8cc; }}
+QPushButton#primary:focus {{ border-color: {_MUTED}; }}
+QPushButton#primary:disabled {{
+    background: transparent; border-color: {_LINE}; color: {_FAINT};
+}}
+QPushButton#primary[live="true"] {{ background: {_LIVE}; color: #ffffff; }}
+QPushButton#primary[live="true"]:hover {{ background: #ff6f65; }}
+QPushButton#primary[live="true"]:pressed {{ background: #e0493f; }}
+QPushButton#primary[live="true"]:focus {{ border-color: #ffb3ad; }}
+QPushButton#primary[live="true"]:disabled {{
+    background: transparent; border-color: {_LINE}; color: {_FAINT};
+}}
 
-QPlainTextEdit {{
-    background: #131313;
-    border: 1px solid {_LINE};
-    border-radius: 2px;
-    padding: 12px;
-    selection-background-color: #3a3a3a;
+QTextEdit {{
+    background: {_SURFACE};
+    border: none;
+    border-radius: 10px;
+    padding: 14px 16px;
+    selection-background-color: {_HOVER};
     selection-color: {_TEXT};
 }}
 QFrame#rule {{ background: {_LINE}; border: none; }}
 
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px 0; }}
 QScrollBar::handle:vertical {{
-    background: #2f2f2f; border-radius: 5px; min-height: 32px;
+    background: {_RAISED}; border-radius: 4px; min-height: 32px;
 }}
-QScrollBar::handle:vertical:hover {{ background: #484848; }}
+QScrollBar::handle:vertical:hover {{ background: {_FOCUS}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
     background: transparent;
+}}
+QToolTip {{
+    background: {_RAISED}; color: {_TEXT}; border: 1px solid {_LINE}; padding: 4px 8px;
 }}
 QMessageBox {{ background: {_SURFACE}; }}
 """
@@ -354,13 +409,29 @@ class _Combo(QComboBox):
     _WIDTH = 9.0
     _HEIGHT = 5.0
 
-    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
-        """Draw the box, then the arrow on top of it."""
-        super().paintEvent(event)
-        painter = QPainter(self)
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
+        """Draw the box, an elided label, then the arrow on top of it."""
+        # QComboBox's own paintEvent, except that the label is elided. Device
+        # names run long enough to hide under the arrow otherwise.
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        field = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxEditField,
+            self,
+        )
+        option.currentText = self.fontMetrics().elidedText(
+            option.currentText, Qt.TextElideMode.ElideRight, field.width()
+        )
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(_MUTED if self.isEnabled() else "#3c3c3c"))
+        painter.setBrush(QColor(_MUTED if self.isEnabled() else _FAINT))
 
         right = self.width() - 13.0
         top = (self.height() - self._HEIGHT) / 2
@@ -375,23 +446,181 @@ class _Combo(QComboBox):
         )
 
 
-class _LevelMeter(QWidget):
-    """A segmented bar showing how loud the incoming audio is.
+class _Chip(QWidget):
+    """A small pill in the header saying what the window is doing.
 
-    Brightness rises across the bar instead of colour changing, so the level
-    still reads at a glance without leaving the grey palette.
+    While recording its dot is red and breathes, so a live recording shows
+    from across the room even with the clock too small to read.
     """
 
-    _SEGMENTS = 48
-    _GAP = 2
-    _PEAK_FALL = 0.012
+    _DOT = 7.0
+    _PAD = 10.0
+    _GAP = 7.0
+    _BREATH = 1.6
+    """Seconds for one full pulse of the dot."""
+
+    def __init__(self) -> None:
+        """Create a chip saying ``ready``."""
+        super().__init__()
+        self._text = "ready"
+        self._live = False
+        self._glow = 1.0
+        font = self.font()
+        font.setFamilies(_MONO_FAMILIES)
+        font.setPointSize(9)
+        self.setFont(font)
+        self.setFixedHeight(self.fontMetrics().height() + 10)
+
+    def show_state(self, text: str, *, live: bool = False) -> None:
+        """Change what the chip says.
+
+        Args:
+            text: A word or two, lower case.
+            live: Whether audio is being captured, which turns the dot red.
+        """
+        self._text = text
+        self._live = live
+        self._glow = 1.0
+        self.updateGeometry()
+        self.update()
+
+    def breathe(self, elapsed: float) -> None:
+        """Advance the pulse of the dot to a point in the recording.
+
+        Driven by the recording's own clock rather than a timer: progress
+        arrives every block anyway, and the pulse stops if the capture does.
+
+        Args:
+            elapsed: Seconds recorded so far.
+        """
+        self._glow = 0.6 + 0.4 * math.cos(2 * math.pi * elapsed / self._BREATH)
+        self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        """Fit the text, the dot and the padding."""
+        width = self.fontMetrics().horizontalAdvance(self._text)
+        return QSize(
+            round(2 * self._PAD + self._DOT + self._GAP + width), self.height()
+        )
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
+        """Draw the pill, the dot and the text."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        radius = self.height() / 2
+        painter.setBrush(QColor(_SURFACE))
+        painter.drawRoundedRect(QRectF(self.rect()), radius, radius)
+
+        dot = QColor(_LIVE if self._live else _FAINT)
+        dot.setAlphaF(self._glow)
+        painter.setBrush(dot)
+        painter.drawEllipse(
+            QRectF(self._PAD, (self.height() - self._DOT) / 2, self._DOT, self._DOT)
+        )
+
+        painter.setPen(QColor(_TEXT if self._live else _MUTED))
+        text = QRectF(self.rect()).adjusted(self._PAD + self._DOT + self._GAP, 0, 0, 0)
+        painter.drawText(text, Qt.AlignmentFlag.AlignVCenter, self._text)
+
+
+class _Transcript(QTextEdit):
+    """The transcript pane: timecodes in a gutter, marks washed in amber.
+
+    Drawn from the paragraphs :func:`read_transcript` finds in the text, so
+    a transcript opened from disk shows the same as one just made. What is
+    on disk is untouched; this is only how it is shown.
+    """
+
+    def __init__(self) -> None:
+        """Create an empty pane."""
+        super().__init__()
+        self.setReadOnly(True)
+        self.setPlaceholderText("the transcript appears here")
+        font = QFont()
+        font.setFamilies(_UI_FAMILIES)
+        font.setPointSizeF(10.5)
+        self.setFont(font)
+        self.document().setDocumentMargin(2)
+        self._source = ""
+
+    def show_transcript(self, text: str) -> None:
+        """Replace what is shown with a whole transcript.
+
+        Args:
+            text: The transcript as written to disk.
+        """
+        header, passages = read_transcript(text)
+        parts = [] if not header else [_header_html(header)]
+        parts.extend(_passage_html(passage) for passage in passages)
+        self.setHtml("".join(parts))
+        self._source = text
+
+    def add_preview(self, timecode: str, text: str) -> None:
+        """Append one segment while recognition is still running.
+
+        Appended rather than redrawn: a full lecture runs to a thousand
+        segments, and laying the whole document out again for each one
+        would slow down the very thing it is watching.
+
+        Args:
+            timecode: Where the segment is, without brackets.
+            text: What was recognised in it.
+        """
+        bar = self.verticalScrollBar()
+        following = bar.value() == bar.maximum()
+        cursor = QTextCursor(self.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(_passage_html(Passage(timecode, text, marked=False)))
+        self._source += f"[{timecode}] {text}\n"
+        # Keep the newest line in view, unless the reader scrolled up to read.
+        if following:
+            bar.setValue(bar.maximum())
+
+    def clear(self) -> None:
+        """Empty the pane and forget the text behind it."""
+        super().clear()
+        self._source = ""
+
+    def createMimeDataFromSelection(self) -> QMimeData:  # noqa: N802 (Qt override)
+        """Copy the text as it is on disk when everything is selected.
+
+        The gutter is a table underneath, and a table copies as one cell per
+        line. Select all then copy is how a transcript leaves the window, so
+        that one case hands over the file's own text instead.
+        """
+        cursor = self.textCursor()
+        whole = (
+            cursor.selectionStart() == 0
+            and cursor.selectionEnd() >= self.document().characterCount() - 1
+        )
+        if not whole or not self._source:
+            return super().createMimeDataFromSelection()
+        data = QMimeData()
+        data.setText(self._source)
+        return data
+
+
+class _LevelMeter(QWidget):
+    """A rounded bar showing how loud the incoming audio is.
+
+    The fill brightens from left to right, so a louder passage reveals a
+    brighter end of the bar and the level reads at a glance without colour,
+    which is kept for meaning.
+    """
+
+    _HEIGHT = 6
+    _FALL = 0.035
+    """Share of the bar the level may sink per block, about 1.6 of it a second."""
+    _PEAK_FALL = 0.004
 
     def __init__(self) -> None:
         """Create an empty meter."""
         super().__init__()
-        self.setFixedHeight(9)
+        self.setFixedHeight(self._HEIGHT)
         self._level = 0.0
         self._peak = 0.0
+        self._progress = False
 
     def set_rms(self, rms: float) -> None:
         """Show the level of the block just recorded.
@@ -399,10 +628,14 @@ class _LevelMeter(QWidget):
         Args:
             rms: Block level from 0.0 to 1.0.
         """
-        self._level = loudness(rms)
-        # The peak marker sinks slowly rather than following every block, so a
-        # brief loud passage stays on screen long enough to be seen.
+        # Rises at once but sinks gradually, as a hardware meter does. Blocks
+        # arrive every 21 ms, and following each one exactly makes the bar
+        # flicker between syllables instead of showing speech.
+        self._level = max(loudness(rms), self._level - self._FALL)
+        # The peak marker sinks slower still, so a brief loud passage stays
+        # on screen long enough to be seen.
         self._peak = max(self._level, self._peak - self._PEAK_FALL)
+        self._progress = False
         self.update()
 
     def set_fraction(self, fraction: float) -> None:
@@ -417,33 +650,47 @@ class _LevelMeter(QWidget):
         """
         self._level = max(0.0, min(1.0, fraction))
         self._peak = 0.0
+        self._progress = True
         self.update()
 
     def reset(self) -> None:
         """Empty the meter, for when nothing is being recorded."""
         self._level = 0.0
         self._peak = 0.0
+        self._progress = False
         self.update()
 
     def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
-        """Draw the segments for the current level and peak."""
+        """Draw the track, the fill for the current level, and the peak."""
         painter = QPainter(self)
-        span = self._GAP * (self._SEGMENTS - 1)
-        width = (self.width() - span) / self._SEGMENTS
-        filled = round(self._SEGMENTS * self._level)
-        peak = round(self._SEGMENTS * self._peak) - 1
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        width = float(self.width())
+        height = float(self.height())
+        radius = height / 2
 
-        for index in range(self._SEGMENTS):
-            if index < filled:
-                shade = 140 + round(105 * index / (self._SEGMENTS - 1))
-            elif index == peak:
-                shade = 150
+        painter.setBrush(QColor(_RAISED))
+        painter.drawRoundedRect(QRectF(0.0, 0.0, width, height), radius, radius)
+
+        filled = width * self._level
+        if filled > 0.0:
+            if self._progress:
+                painter.setBrush(QColor(_TEXT))
             else:
-                shade = 40
-            painter.fillRect(
-                QRectF(index * (width + self._GAP), 0.0, width, self.height()),
-                QColor(shade, shade, shade),
+                ramp = QLinearGradient(0.0, 0.0, width, 0.0)
+                ramp.setColorAt(0.0, QColor(_FAINT))
+                ramp.setColorAt(1.0, QColor("#ffffff"))
+                painter.setBrush(ramp)
+            # Never narrower than the bar is tall, or the rounded ends of a
+            # nearly silent level fold into a smudge.
+            painter.drawRoundedRect(
+                QRectF(0.0, 0.0, max(filled, height), height), radius, radius
             )
+
+        if self._peak > self._level:
+            painter.setBrush(QColor(_TEXT))
+            left = min(width * self._peak, width - 2.0)
+            painter.drawRoundedRect(QRectF(left - 1.0, 0.0, 2.0, height), 1.0, 1.0)
 
 
 class _Window(QWidget):
@@ -482,23 +729,38 @@ class _Window(QWidget):
         layout.setContentsMargins(34, 26, 34, 26)
         layout.setSpacing(0)
 
-        title = QLabel("LECTURE SCRIBE")
-        title.setObjectName("caption")
-        _track(title, 2.4)
-        layout.addWidget(title)
-        layout.addSpacing(26)
+        header = QHBoxLayout()
+        title = QLabel("Lecture Scribe")
+        title.setObjectName("title")
+        title_font = title.font()
+        title_font.setPointSize(11)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        title.setFont(title_font)
+        self._chip = _Chip()
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self._chip)
+        layout.addLayout(header)
+        layout.addSpacing(22)
 
         form = QGridLayout()
-        form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(10)
-        form.setColumnStretch(1, 1)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(5)
+        # The device name is the longer of the two by far.
+        form.setColumnStretch(0, 1)
+        form.setColumnStretch(1, 2)
         self._course = QLineEdit()
-        self._course.setPlaceholderText("subject name, used for the folder")
+        self._course.setPlaceholderText("used for the folder")
         self._course.textChanged.connect(self._refresh)
         self._device_box = _Combo()
-        form.addWidget(_caption("COURSE"), 0, 0)
-        form.addWidget(self._course, 0, 1)
-        form.addWidget(_caption("DEVICE"), 1, 0)
+        # Without this the longest device name sets the window's minimum width.
+        self._device_box.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._device_box.setMinimumContentsLength(12)
+        form.addWidget(_caption("Course"), 0, 0)
+        form.addWidget(_caption("Device"), 0, 1)
+        form.addWidget(self._course, 1, 0)
         form.addWidget(self._device_box, 1, 1)
         layout.addLayout(form)
         layout.addSpacing(34)
@@ -507,9 +769,12 @@ class _Window(QWidget):
         self._clock.setObjectName("clock")
         self._clock.setAlignment(Qt.AlignmentFlag.AlignCenter)
         clock_font = QFont()
-        clock_font.setFamilies(_MONO_FAMILIES)
-        clock_font.setPointSize(38)
-        clock_font.setWeight(QFont.Weight.Light)
+        clock_font.setFamilies(_UI_FAMILIES)
+        clock_font.setPointSize(44)
+        clock_font.setWeight(QFont.Weight.ExtraLight)
+        # Proportional digits make the whole clock shuffle sideways each second.
+        clock_font.setFeature(QFont.Tag("tnum"), 1)
+        clock_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 96)
         self._clock.setFont(clock_font)
         layout.addWidget(self._clock)
         layout.addSpacing(16)
@@ -529,6 +794,7 @@ class _Window(QWidget):
         self._record.setObjectName("primary")
         self._record.clicked.connect(self._toggle_record)
         self._mark = QPushButton("mark")
+        self._mark.setIcon(_glyph("dot", _MARK))
         self._mark.setToolTip("flag this moment in the transcript (Ctrl+M)")
         self._mark.clicked.connect(self._mark_moment)
         self._open = QPushButton("open")
@@ -541,6 +807,7 @@ class _Window(QWidget):
         buttons.setSpacing(10)
         buttons.addStretch(1)
         for button in (self._record, self._mark, self._open, self._text):
+            button.setIconSize(QSize(_GLYPH + _GLYPH_GAP, _GLYPH))
             buttons.addWidget(button)
         buttons.addStretch(1)
         layout.addLayout(buttons)
@@ -558,13 +825,7 @@ class _Window(QWidget):
         layout.addWidget(self._status)
         layout.addSpacing(14)
 
-        self._transcript = QPlainTextEdit()
-        self._transcript.setReadOnly(True)
-        self._transcript.setPlaceholderText("the transcript appears here")
-        transcript_font = QFont()
-        transcript_font.setFamilies(_MONO_FAMILIES)
-        transcript_font.setPointSize(10)
-        self._transcript.setFont(transcript_font)
+        self._transcript = _Transcript()
         layout.addWidget(self._transcript, 1)
 
         mark = QShortcut(QKeySequence("Ctrl+M"), self)
@@ -596,6 +857,7 @@ class _Window(QWidget):
         """Start recording, or stop the recording that is running."""
         if self._recording and self._recorder is not None:
             self._say("stopping ...")
+            self._chip.show_state("stopping")
             self._record.setEnabled(False)
             self._recorder.stop()
             return
@@ -641,13 +903,14 @@ class _Window(QWidget):
         note = (
             "" if self._awake.held else f" · the screen may lock: {self._awake.detail}"
         )
-        self._say(f"recording to {self._wav}{note}")
+        self._say(f"recording to {_short_path(self._wav)}{note}", path=self._wav)
         worker.start()
 
     def _on_progress(self, progress: Progress) -> None:
         """Redraw the clock, meter and level readout."""
         self._elapsed = progress.elapsed
         self._clock.setText(_clock(progress.elapsed))
+        self._chip.breathe(progress.elapsed)
         self._meter.set_rms(progress.rms)
         self._levels.setText(
             f"{_dbfs(progress.rms)}   ·   {progress.bytes_written / 1_000_000:.1f} MB"
@@ -676,7 +939,11 @@ class _Window(QWidget):
                 problem=True,
             )
         else:
-            self._say(f"stopped after {_clock(recording.duration)} · {recording.path}")
+            self._say(
+                f"stopped after {_clock(recording.duration)} · "
+                f"{_short_path(recording.path)}",
+                path=recording.path,
+            )
         self._refresh()
 
     def _on_record_failed(self, message: str) -> None:
@@ -702,8 +969,16 @@ class _Window(QWidget):
         if self._recording:
             self._recording = False
             self._meter.reset()
-            kept = f"; whatever was captured is at {self._wav}" if self._wav else ""
-            self._say(f"the recording ended without saying why{kept}", problem=True)
+            kept = (
+                f"; whatever was captured is at {_short_path(self._wav)}"
+                if self._wav
+                else ""
+            )
+            self._say(
+                f"the recording ended without saying why{kept}",
+                problem=True,
+                path=self._wav,
+            )
             self._refresh()
 
     def _mark_moment(self) -> None:
@@ -762,7 +1037,10 @@ class _Window(QWidget):
         transcript = earlier_transcript(existing.path)
         if transcript is None:
             self._transcript.clear()
-            self._say(f"{existing.path} · not transcribed yet")
+            self._say(
+                f"{_short_path(existing.path)} · not transcribed yet",
+                path=existing.path,
+            )
             return
 
         try:
@@ -772,7 +1050,7 @@ class _Window(QWidget):
             self._say(f"cannot read {transcript}: {error}", problem=True)
             return
 
-        self._transcript.setPlainText(text)
+        self._transcript.show_transcript(text)
         target = transcript_path(existing.path)
         # A transcript under an older name is left where it is, so saying it
         # gets replaced would be untrue: the new one lands beside it.
@@ -780,14 +1058,16 @@ class _Window(QWidget):
             "replaces it" if transcript == target else f"writes {target.name} beside it"
         )
         self._say(
-            f"{existing.path} · showing the transcript made earlier, "
-            f"transcribing again {outcome}"
+            f"{_short_path(existing.path)} · showing the transcript made earlier, "
+            f"transcribing again {outcome}",
+            path=existing.path,
         )
 
     def _start_transcription(self) -> None:
         """Start recognition, or give up the one that is running."""
         if self._transcribing and self._transcriber is not None:
             self._say("stopping recognition ...")
+            self._chip.show_state("stopping")
             self._text.setEnabled(False)
             self._transcriber.stop()
             return
@@ -817,6 +1097,7 @@ class _Window(QWidget):
         """
         self._clock.setText(_clock(decoding.position))
         self._meter.set_fraction(decoding.fraction)
+        self._chip.show_state(f"transcribing {decoding.fraction * 100:.0f}%")
         left = (
             decoding.elapsed / decoding.fraction - decoding.elapsed
             if decoding.fraction > 0.0
@@ -828,8 +1109,8 @@ class _Window(QWidget):
         )
         # The end of the segment rather than its start: near enough for a
         # preview the finished render is about to replace.
-        self._transcript.appendPlainText(
-            f"{format_timecode(decoding.position)} {decoding.text}"
+        self._transcript.add_preview(
+            format_timecode(decoding.position).strip("[]"), decoding.text
         )
 
     def _on_transcribed(
@@ -839,18 +1120,18 @@ class _Window(QWidget):
         self._transcribing = False
         self._meter.reset()
         self._clock.setText(_clock(result.audio_duration))
-        self._transcript.setPlainText(text)
+        self._transcript.show_transcript(text)
         ratio = (
             result.decode_seconds / result.audio_duration
             if result.audio_duration > 0
             else 0.0
         )
         message = (
-            f"wrote {path} · {_plural(len(result.segments), 'segment')} · "
+            f"wrote {_short_path(path)} · {_plural(len(result.segments), 'segment')} · "
             f"{_clock(result.decode_seconds)} ({ratio:.2f}x audio length)"
         )
         line, problem = _with_upload(message, upload)
-        self._say(line, problem=problem)
+        self._say(line, problem=problem, path=path)
         self._refresh()
 
     def _on_transcribe_stopped(self, message: str) -> None:
@@ -911,29 +1192,43 @@ class _Window(QWidget):
         idle = not self._recording and not self._transcribing
         named = bool(self._course.text().strip())
         self._record.setText("stop" if self._recording else "record")
+        self._record.setIcon(
+            _glyph("square", "#ffffff") if self._recording else _glyph("dot", _LIVE)
+        )
+        self._record.setProperty("live", self._recording)
+        _restyle(self._record)
         self._record.setEnabled(
             self._recording or (idle and named and bool(self._devices))
         )
         self._mark.setEnabled(self._recording)
         self._open.setEnabled(idle)
         self._text.setText("stop" if self._transcribing else "transcribe")
+        self._text.setIcon(_glyph("square", _TEXT) if self._transcribing else QIcon())
         self._text.setEnabled(self._transcribing or (idle and self._wav is not None))
         self._course.setEnabled(idle)
         self._device_box.setEnabled(idle)
+        if self._recording:
+            self._chip.show_state("recording", live=True)
+        elif self._transcribing:
+            self._chip.show_state("transcribing")
+        else:
+            self._chip.show_state("ready")
 
-    def _say(self, message: str, *, problem: bool = False) -> None:
+    def _say(
+        self, message: str, *, problem: bool = False, path: Path | None = None
+    ) -> None:
         """Put one line in the status row.
 
         Args:
             message: Text to show.
             problem: Whether to draw it as something needing attention.
+            path: The file the line is about, shown in full on hover. The
+                line itself names it by folder and file only, since the home
+                directory in front of every path wrapped it onto two lines.
         """
+        self._status.setToolTip("" if path is None else str(path))
         self._status.setProperty("problem", problem)
-        # A property already read by the stylesheet only takes effect on a
-        # live widget after the style is applied again.
-        style = self._status.style()
-        style.unpolish(self._status)
-        style.polish(self._status)
+        _restyle(self._status)
         self._status.setText(message)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
@@ -1040,11 +1335,91 @@ def main() -> int:
 
 
 def _caption(text: str) -> QLabel:
-    """Build one of the small tracked-out labels beside a field."""
+    """Build one of the small labels above a field."""
     label = QLabel(text)
     label.setObjectName("caption")
-    _track(label, 1.6)
+    font = label.font()
+    font.setPointSize(9)
+    label.setFont(font)
     return label
+
+
+def _header_html(header: str) -> str:
+    """Draw a transcript's header line, quieter than the text below it."""
+    return (
+        f'<p style="font-family: {_css_families(_MONO_FAMILIES)}; font-size: 9pt; '
+        f'color: {_MUTED}; margin-bottom: 8px;">{html.escape(header)}</p>'
+    )
+
+
+def _passage_html(passage: Passage) -> str:
+    """Draw one paragraph as a row: timecode in the gutter, text beside it.
+
+    A table because Qt's rich text has no hanging indent that holds when the
+    pane is resized, and a wrapped line has to stay clear of the timecode.
+    """
+    wash = f' bgcolor="{_MARK_WASH}"' if passage.marked else ""
+    stamp = _MARK if passage.marked else _FAINT
+    return (
+        f'<table width="100%" cellspacing="0" cellpadding="5"{wash} '
+        f'style="margin-bottom: 6px;"><tr>'
+        f'<td valign="top" style="font-family: {_css_families(_MONO_FAMILIES)}; '
+        f'font-size: 9pt; color: {stamp}; padding-right: 12px; white-space: nowrap;">'
+        f"{html.escape(passage.timecode)}</td>"
+        # All the spare width goes to the text, which shrinks the gutter to
+        # its timecode. A fixed pixel width is only a hint to Qt's table
+        # layout, and rows of different lengths came out with different
+        # gutters. Every timecode in one transcript is the same width.
+        f'<td width="100%"><p style="line-height: 150%;">'
+        f"{html.escape(passage.text)}</p></td></tr></table>"
+    )
+
+
+def _css_families(families: tuple[str, ...]) -> str:
+    """Quote a fallback stack for a rich text ``font-family``."""
+    return ", ".join(f"'{family}'" for family in families)
+
+
+def _restyle(widget: QWidget) -> None:
+    """Apply the stylesheet again after a property it reads has changed.
+
+    A dynamic property only takes effect on a live widget once the style has
+    been taken off and put back on.
+    """
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+
+
+def _glyph(shape: Literal["dot", "square"], colour: str) -> QIcon:
+    """Paint a small button icon, so shapes cost no image files.
+
+    Args:
+        shape: A dot for record and mark, a square for stop.
+        colour: Fill while the button is enabled; disabled is always faint.
+
+    Returns:
+        An icon with its own disabled look, since Qt's automatic one only
+        greys out the fill rather than matching the faint button text.
+    """
+    icon = QIcon()
+    for mode, fill in ((QIcon.Mode.Normal, colour), (QIcon.Mode.Disabled, _FAINT)):
+        # Drawn at twice the size so it stays crisp on a scaled display.
+        pixmap = QPixmap((_GLYPH + _GLYPH_GAP) * 2, _GLYPH * 2)
+        pixmap.setDevicePixelRatio(2.0)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(fill))
+        box = QRectF(1.0, 1.0, _GLYPH - 2.0, _GLYPH - 2.0)
+        if shape == "dot":
+            painter.drawEllipse(box)
+        else:
+            painter.drawRoundedRect(box, 1.5, 1.5)
+        painter.end()
+        icon.addPixmap(pixmap, mode)
+    return icon
 
 
 def _track(label: QLabel, spacing: float) -> None:
@@ -1052,6 +1427,15 @@ def _track(label: QLabel, spacing: float) -> None:
     font = label.font()
     font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
     label.setFont(font)
+
+
+def _short_path(path: Path) -> str:
+    """Name a file by its lecture folder and its own name.
+
+    The folder is the lecture's date and course, so the two together say
+    which lecture it is without the directories above them.
+    """
+    return f"{path.parent.name}/{path.name}"
 
 
 def _plural(count: int, noun: str) -> str:

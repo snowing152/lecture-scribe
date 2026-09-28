@@ -128,13 +128,17 @@ The window
 </summary> <br />
 
 `scribe gui` opens the same tool as a window, for when a terminal is not where
-you want to be while a lecture runs. It is monochrome on purpose: greys only,
-and loudness reads as brightness rather than colour.
+you want to be while a lecture runs. It is dark and mostly grey, and colour
+only ever means something: red while a recording is live, amber for a mark.
+Loudness reads as brightness.
 
 Type a course name, press **record**, and press **mark** (or `Ctrl+M`) at a
 moment worth finding again — those become the `>>>` paragraphs. **stop** closes
 the WAV, **transcribe** runs the model and shows the transcript in the pane; it
-is written beside the recording either way.
+is written beside the recording either way. The pane puts timecodes in a
+column of their own and shows marked paragraphs in amber rather than with
+`>>>`; the file itself is unchanged, and select all then copy gives its exact
+text.
 
 **open** (or `Ctrl+O`) picks a recording made earlier instead — one from a
 previous session, or a WAV that never came from `scribe rec` at all. If a

@@ -2,7 +2,12 @@
 
 from collections.abc import Sequence
 
-from lecture_scribe.format_text import format_timecode, render_transcript
+from lecture_scribe.format_text import (
+    Passage,
+    format_timecode,
+    read_transcript,
+    render_transcript,
+)
 from lecture_scribe.transcribe import Segment
 
 
@@ -258,3 +263,49 @@ def test_render_transcript_wraps_long_paragraphs() -> None:
     assert len(lines) > 1
     assert lines[0].startswith("[00:00] ")
     assert all(line.startswith(" " * len("[00:00] ")) for line in lines[1:])
+
+
+def test_read_transcript_gives_back_what_render_wrote() -> None:
+    long = ("넷째 " * 30).strip()
+    segments = [
+        Segment(start=0.0, end=1.0, text="first", avg_logprob=-0.1),
+        Segment(start=5.0, end=6.0, text=long, avg_logprob=-0.1),
+    ]
+
+    header, passages = read_transcript(
+        _render(segments, audio_duration=6.0, marks=[5.5])
+    )
+
+    assert header == "lecture -- large-v3 (ko), 0:00:06"
+    assert passages == [
+        Passage(timecode="00:00", text="first", marked=False),
+        Passage(timecode="00:05", text=long, marked=True),
+    ]
+
+
+def test_read_transcript_keeps_the_hour_of_a_long_recording() -> None:
+    segments = [Segment(start=3700.0, end=3701.0, text="late", avg_logprob=-0.1)]
+
+    _header, passages = read_transcript(_render(segments, audio_duration=3701.0))
+
+    assert passages == [Passage(timecode="1:01:40", text="late", marked=False)]
+
+
+def test_read_transcript_keeps_a_block_without_a_timecode() -> None:
+    header, passages = read_transcript(_render([], audio_duration=6.0))
+
+    assert header == "lecture -- large-v3 (ko), 0:00:06"
+    assert passages == [
+        Passage(timecode="", text="(no speech recognised)", marked=False)
+    ]
+
+
+def test_read_transcript_of_text_with_no_header_starts_with_a_paragraph() -> None:
+    header, passages = read_transcript("[00:01] only\n")
+
+    assert header == ""
+    assert passages == [Passage(timecode="00:01", text="only", marked=False)]
+
+
+def test_read_transcript_of_nothing_is_empty() -> None:
+    assert read_transcript("") == ("", [])

@@ -24,9 +24,11 @@ one core.
 - **The window is a second front end, never the only one.** `cli.py` and
   `gui.py` are peers: everything the window does stays reachable from the
   command line, and neither holds logic the other needs.
-- **The window is monochrome.** Greys only, no accent colour; loudness reads
-  as brightness. Qt's Fusion style is forced on both platforms, since the
-  native styles are too far apart for one stylesheet.
+- **The window is dark, greys plus two signal colours**, changed from greys
+  only on 2026-09-28. Red means a recording is live, amber means a mark.
+  Colour carries meaning, never decoration, and there is no light theme.
+  Qt's Fusion style is forced on both platforms, since the native styles are
+  too far apart for one stylesheet.
 - **Audio files are never deleted or overwritten automatically.** A recording
   cannot be recreated; recognition can be repeated as often as wanted.
 - **Do not swap `soundcard` for `sounddevice`** — `WasapiSettings` has no
@@ -134,6 +136,15 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 - Qt stops drawing a combo box's native arrow as soon as `::drop-down` is
   styled at all, and the CSS border-triangle trick renders as a rectangle.
   `_Combo` paints the arrow itself.
+- `QFont.setFeature` takes a `QFont.Tag`, not a string, whatever the stubs
+  say: they allow `str` and mypy passes, but PySide 6.11 raises `ValueError`
+  on `setFeature("tnum", 1)` at runtime.
+- In Qt rich text a `<td width="68">` is only a hint: rows of different
+  lengths came out with different gutters. The transcript pane gives the
+  text cell `width="100%"` and the timecode cell `white-space: nowrap`,
+  without which Qt breaks `00:47` one character per line.
+- The pane copies the file's own text on select all, not what it shows: a
+  table copies one cell per line. `_Transcript.createMimeDataFromSelection`.
 - Qt stylesheets have no `letter-spacing`; it only exists as
   `QFont.setLetterSpacing`, hence `_track()`.
 - Frozen dataclasses cross `QThread` signal boundaries intact and arrive on
@@ -280,3 +291,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | U | `upload.py`: transcripts to Google Drive through rclone, `[upload]` in config, doctor section, notification | done — verified on Linux, CLI and window; the Windows branch is unrun |
+| R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified offscreen on Linux; not yet looked at live, nor on Windows |
