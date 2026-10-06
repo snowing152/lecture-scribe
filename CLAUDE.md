@@ -216,8 +216,12 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   current directory. `config.py` refuses such a remote for that reason.
 - **The rclone remote uses scope `drive.file` and a client ID of the user's
   own.** rclone's shared client ID is being retired during 2026 (its own
-  docs, and its config prompt says so). The Google app is published, not
-  left in testing, where the sign-in expires after seven days.
+  docs, and its config prompt says so). The Google app must be published,
+  not left in testing, where the sign-in expires after seven days.
+- **Publishing does not rescue a sign-in made while the app was in
+  testing.** It was still in testing on 2026-09-28; seven days later every
+  upload failed with `invalid_grant: maybe token expired?`. Publishing and
+  then `rclone config reconnect gdrive:` fixed it on 2026-10-06.
 - **With `drive.file` rclone sees only what it created.** Measured:
   `rclone lsd gdrive:` listed nothing on a Drive holding 67 GB, until
   `rclone mkdir gdrive:Lectures`. A folder made by hand in the browser is
