@@ -295,4 +295,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | U | `upload.py`: transcripts to Google Drive through rclone, `[upload]` in config, doctor section, notification | done — verified on Linux, CLI and window; the Windows branch is unrun |
-| R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified offscreen on Linux; not yet looked at live, nor on Windows |
+| R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |
