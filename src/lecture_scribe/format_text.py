@@ -94,7 +94,7 @@ def render_transcript(
     Returns:
         The complete transcript text, header included, ending in a newline.
     """
-    header = f"{title} -- {model} ({language}), {_plain_duration(audio_duration)}\n"
+    header = f"{title} -- {model} ({language}), {format_duration(audio_duration)}\n"
     if not segments:
         return f"{header}\n(no speech recognised)\n"
 
@@ -177,6 +177,24 @@ def format_timecode(seconds: float, *, with_hour: bool = False) -> str:
     if hours or with_hour:
         return f"[{hours}:{minutes:02d}:{secs:02d}]"
     return f"[{minutes:02d}:{secs:02d}]"
+
+
+def format_duration(seconds: float) -> str:
+    """Format a length of time, the hour always shown.
+
+    Unlike a timecode this is a quantity rather than a place in the lecture,
+    as in a transcript's header, a clock or the time left.
+
+    Args:
+        seconds: Length in seconds; any fraction is dropped.
+
+    Returns:
+        ``H:MM:SS``.
+    """
+    whole = int(seconds)
+    hours, remainder = divmod(whole, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
 
 
 def _group_paragraphs(
@@ -271,11 +289,3 @@ def _render_paragraph(paragraph: _Paragraph, *, marked: bool, with_hour: bool) -
         break_long_words=False,
         break_on_hyphens=False,
     )
-
-
-def _plain_duration(seconds: float) -> str:
-    """Format a duration as ``H:MM:SS``, hour always shown."""
-    whole = int(seconds)
-    hours, remainder = divmod(whole, 3600)
-    minutes, secs = divmod(remainder, 60)
-    return f"{hours}:{minutes:02d}:{secs:02d}"

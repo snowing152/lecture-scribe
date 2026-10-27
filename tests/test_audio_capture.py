@@ -16,8 +16,10 @@ from lecture_scribe.audio_capture import (
     LoopbackDevice,
     Recording,
     course_slug,
+    dbfs,
     inspect_recording,
     lecture_dir,
+    loudness,
     recording_path,
     resolve_device,
 )
@@ -336,3 +338,39 @@ def test_a_file_that_is_not_audio_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(AudioDeviceError, match="cannot read"):
         inspect_recording(not_audio)
+
+
+def test_full_scale_is_zero_dbfs() -> None:
+    assert dbfs(1.0) == "0.0 dBFS"
+    assert dbfs(0.001) == "-60.0 dBFS"
+
+
+def test_digital_silence_is_minus_infinity() -> None:
+    # log10 of zero would raise rather than print anything.
+    assert dbfs(0.0) == "-inf dBFS"
+
+
+def test_loudness_of_silence_is_an_empty_meter() -> None:
+    assert loudness(0.0) == 0.0
+
+
+def test_loudness_of_full_scale_fills_the_meter() -> None:
+    assert loudness(1.0) == 1.0
+
+
+def test_loudness_at_the_floor_is_an_empty_meter() -> None:
+    # 0.001 is -60 dBFS, the level the meter is drawn from.
+    assert loudness(0.001) == pytest.approx(0.0)
+
+
+def test_loudness_is_half_way_at_half_the_decibel_range() -> None:
+    assert loudness(0.0316227766) == pytest.approx(0.5, abs=1e-6)
+
+
+def test_loudness_clamps_below_the_floor() -> None:
+    assert loudness(1e-9) == 0.0
+
+
+def test_loudness_clamps_above_full_scale() -> None:
+    # A block that clipped should pin the meter rather than overrun it.
+    assert loudness(2.5) == 1.0

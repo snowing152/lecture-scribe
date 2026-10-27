@@ -40,6 +40,9 @@ is measured in whole windows, so a device that goes quiet is reported between
 two and four minutes later rather than at once.
 """
 
+_FLOOR_DBFS = -60.0
+"""Level shown as an empty meter; below this a lecture is inaudible anyway."""
+
 # Characters Windows rejects in a path component.
 _FORBIDDEN_IN_NAMES = frozenset('<>:"/\\|?*')
 
@@ -366,6 +369,37 @@ def _silence_warning(device: LoopbackDevice, seconds: float, *, opening: bool) -
         f"{seconds / 60:.0f} minutes; if the sound moved to another output, "
         "stop and start again -- recording continues"
     )
+
+
+def dbfs(level: float) -> str:
+    """Format a level as decibels below full scale.
+
+    Args:
+        level: A level from 0.0 to 1.0, as :class:`Progress` and
+            :class:`Recording` report it.
+
+    Returns:
+        Such as ``-23.5 dBFS``, or ``-inf dBFS`` for digital silence.
+    """
+    if level <= 0.0:
+        return "-inf dBFS"
+    return f"{20 * math.log10(level):.1f} dBFS"
+
+
+def loudness(level: float) -> float:
+    """Map a level to how full a level meter should be drawn.
+
+    Args:
+        level: A level from 0.0 to 1.0, as :class:`Progress` reports it.
+
+    Returns:
+        A share from 0.0 to 1.0 on a decibel scale, ``_FLOOR_DBFS`` reading
+        empty and full scale full.
+    """
+    if level <= 0.0:
+        return 0.0
+    filled = (20 * math.log10(level) - _FLOOR_DBFS) / -_FLOOR_DBFS
+    return max(0.0, min(1.0, filled))
 
 
 def lecture_dir(root: Path, course: str, when: datetime) -> Path:

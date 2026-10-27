@@ -1,5 +1,6 @@
 """Tests for the parts of transcribe.py that do not need a real model."""
 
+import errno
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ import pytest
 from lecture_scribe import transcribe as transcribe_module
 from lecture_scribe.transcribe import (
     Decoding,
+    Transcription,
     TranscriptionError,
     compute_type,
     earlier_transcript,
@@ -18,6 +20,7 @@ from lecture_scribe.transcribe import (
     model_status,
     transcribe,
     transcript_path,
+    write_transcript,
 )
 
 
@@ -312,6 +315,52 @@ def test_fraction_is_the_share_of_the_recording_done() -> None:
     assert step.fraction == pytest.approx(0.25)
 
 
+def test_time_left_assumes_the_pace_so_far_holds() -> None:
+    # A quarter done in 7 seconds leaves three quarters, 21 seconds.
+    step = Decoding(
+        position=30.0, audio_duration=120.0, elapsed=7.0, segments=4, text="x"
+    )
+
+    assert step.remaining == pytest.approx(21.0)
+
+
+def test_speed_is_audio_recognised_per_second_of_decoding() -> None:
+    step = Decoding(
+        position=30.0, audio_duration=120.0, elapsed=7.5, segments=4, text="x"
+    )
+
+    assert step.speed == pytest.approx(4.0)
+
+
+def test_speed_is_zero_before_any_time_has_passed() -> None:
+    step = Decoding(
+        position=0.0, audio_duration=120.0, elapsed=0.0, segments=1, text=""
+    )
+
+    assert step.speed == 0.0
+
+
+def test_no_time_left_is_guessed_before_any_audio_is_done() -> None:
+    step = Decoding(
+        position=0.0, audio_duration=120.0, elapsed=3.0, segments=1, text=""
+    )
+
+    assert step.remaining == 0.0
+
+
+def test_decode_ratio_compares_decoding_with_the_audio() -> None:
+    # The 81 minute lecture decoded in 3.9 minutes on the GPU.
+    result = Transcription(segments=[], audio_duration=4860.0, decode_seconds=234.0)
+
+    assert result.decode_ratio == pytest.approx(0.048, abs=1e-3)
+
+
+def test_decode_ratio_of_a_recording_with_no_length_is_zero() -> None:
+    result = Transcription(segments=[], audio_duration=0.0, decode_seconds=0.2)
+
+    assert result.decode_ratio == 0.0
+
+
 def test_fraction_of_a_recording_with_no_length_is_finished() -> None:
     # An empty file would otherwise divide by zero on the first segment.
     step = Decoding(position=0.0, audio_duration=0.0, elapsed=0.1, segments=1, text="x")
@@ -374,3 +423,33 @@ def test_recognition_that_runs_to_the_end_is_not_interrupted(tmp_path: Path) -> 
 
     assert result.interrupted is None
     assert model.yielded == 1
+
+
+def test_a_transcript_is_written_whole(tmp_path: Path) -> None:
+    target = tmp_path / "os.txt"
+
+    write_transcript(target, "os -- large-v3 (ko), 0:00:02\n\n[00:00] 네.\n")
+
+    assert target.read_text(encoding="utf-8").endswith("[00:00] 네.\n")
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_a_failed_write_leaves_the_earlier_transcript_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "os.txt"
+    target.write_text("the complete transcript\n", encoding="utf-8")
+    real_write = Path.write_text
+
+    def fill_the_disk(path: Path, text: str, **kwargs: str) -> int:
+        real_write(path, text[: len(text) // 2], **kwargs)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", fill_the_disk)
+
+    with pytest.raises(OSError, match="No space left"):
+        write_transcript(target, "a new transcript that never fits\n")
+
+    monkeypatch.undo()
+    assert target.read_text(encoding="utf-8") == "the complete transcript\n"
+    assert list(tmp_path.iterdir()) == [target]

@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from lecture_scribe.format_text import (
     Passage,
+    format_duration,
     format_timecode,
     read_transcript,
     render_transcript,
@@ -309,3 +310,9 @@ def test_read_transcript_of_text_with_no_header_starts_with_a_paragraph() -> Non
 
 def test_read_transcript_of_nothing_is_empty() -> None:
     assert read_transcript("") == ("", [])
+
+
+def test_a_duration_always_shows_the_hour() -> None:
+    assert format_duration(0.0) == "0:00:00"
+    assert format_duration(754.9) == "0:12:34"
+    assert format_duration(4865.0) == "1:21:05"

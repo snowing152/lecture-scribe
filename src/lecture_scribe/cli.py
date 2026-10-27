@@ -1,7 +1,6 @@
 """Command line entry point: argument parsing and wiring, nothing else."""
 
 import argparse
-import math
 import platform
 import shutil
 import signal
@@ -17,8 +16,11 @@ from lecture_scribe.audio_capture import (
     AudioDeviceError,
     LoopbackDevice,
     Progress,
+    dbfs,
+    inspect_recording,
     lecture_dir,
     list_loopback_devices,
+    loudness,
     record_loopback,
     recording_path,
     resolve_device,
@@ -30,7 +32,7 @@ from lecture_scribe.config import (
     load_config,
     merge_cli,
 )
-from lecture_scribe.format_text import render_transcript
+from lecture_scribe.format_text import format_duration, render_transcript
 from lecture_scribe.keep_awake import awake_status, keep_awake
 from lecture_scribe.launcher import LauncherError
 from lecture_scribe.launcher import install as install_launcher
@@ -44,11 +46,8 @@ from lecture_scribe.transcribe import (
     model_status,
     transcribe,
     transcript_path,
+    write_transcript,
 )
-from lecture_scribe.upload import announce, push_transcript, upload_status
-
-# Commands whose arguments are already fixed but whose behaviour arrives later.
-_PENDING = {"find": 5}
 
 _LABEL_WIDTH = 14
 
@@ -86,14 +85,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _gui(config)
     if command == "launcher":
         return _launcher(remove=args.remove)
-
-    step = _PENDING[command]
-    print(f"`scribe {command}` arrives in step {step}.", file=sys.stderr)
-    return 1
+    parser.error(f"unknown command '{command}'")
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Describe the full command line, including the commands still pending."""
+    """Describe the full command line."""
     parser = argparse.ArgumentParser(
         prog="scribe",
         description="Record a lecture playing on this computer and transcribe it.",
@@ -120,9 +116,6 @@ def _build_parser() -> argparse.ArgumentParser:
     launcher.add_argument(
         "--remove", action="store_true", help="take the menu entry back out"
     )
-
-    find = commands.add_parser("find", help="full text search across all transcripts")
-    find.add_argument("query", help="text to look for")
 
     return parser
 
@@ -221,7 +214,11 @@ def _rec(config: Config, course: str) -> int:
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    folder.mkdir(parents=True)
+    try:
+        folder.mkdir(parents=True)
+    except OSError as error:
+        print(f"error: cannot create {folder}: {error}", file=sys.stderr)
+        return 1
     target = recording_path(folder)
 
     awake = keep_awake("recording a lecture")
@@ -259,9 +256,9 @@ def _rec(config: Config, course: str) -> int:
         awake.release()
     status.clear()
 
-    print(f"stopped after {_hms(recording.duration)}")
+    print(f"stopped after {format_duration(recording.duration)}")
     _row("size", f"{target.stat().st_size / 1_000_000:.1f} MB")
-    _row("level", f"mean {_dbfs(recording.mean_rms)}, peak {_dbfs(recording.peak)}")
+    _row("level", f"mean {dbfs(recording.mean_rms)}, peak {dbfs(recording.peak)}")
     if recording.interrupted is not None:
         print(f"\n{recording.interrupted}.", file=sys.stderr)
         return 1
@@ -276,10 +273,11 @@ def _rec(config: Config, course: str) -> int:
 def _text(config: Config, wavs: list[Path]) -> int:
     """Transcribe one or more recordings, writing a readable transcript of each.
 
-    Paths are checked before the model is loaded: large-v3 can take a while
-    to load or download, and a typo in a filename should fail in an instant
-    rather than after that wait -- doubly so since a model already loading in
-    another process blocks a second load on the same cache until it finishes.
+    Files are checked before the model is loaded: large-v3 can take a while
+    to load or download, and a typo in a filename, or a file that is not a
+    recording at all, should fail in an instant rather than after that wait
+    -- doubly so since a model already loading in another process blocks a
+    second load on the same cache until it finishes.
 
     The model is loaded once and reused for every valid file: loading alone
     can take longer than transcribing a short recording, and a lecture
@@ -287,8 +285,9 @@ def _text(config: Config, wavs: list[Path]) -> int:
 
     One bad file is reported and skipped rather than aborting the rest of the
     batch; a missing model affects every file identically and aborts
-    immediately instead. Ctrl+C ends the whole batch: it is the user saying
-    they want their machine back, not that this one file is unwanted.
+    immediately instead, as does a transcript that cannot be written, which
+    is nearly always a full disk. Ctrl+C ends the whole batch: it is the user
+    saying they want their machine back, not that this one file is unwanted.
 
     Args:
         config: Effective configuration, command line overrides applied.
@@ -298,14 +297,20 @@ def _text(config: Config, wavs: list[Path]) -> int:
         The process exit code: 0 if every file transcribed, 1 if any failed.
     """
     failures = 0
-    existing = []
+    readable = []
     for wav in wavs:
-        if wav.is_file():
-            existing.append(wav)
-        else:
+        if not wav.is_file():
             print(f"error: {wav} does not exist", file=sys.stderr)
             failures += 1
-    if not existing:
+            continue
+        try:
+            inspect_recording(wav)
+        except AudioDeviceError as error:
+            print(f"error: {error}", file=sys.stderr)
+            failures += 1
+            continue
+        readable.append(wav)
+    if not readable:
         return 1
 
     # Loading the model, and on a first run downloading it, is part of the
@@ -313,7 +318,7 @@ def _text(config: Config, wavs: list[Path]) -> int:
     with keep_awake("transcribing lectures") as awake:
         if not awake.held:
             print(f"note: the desktop may lock or suspend meanwhile, {awake.detail}")
-        return _transcribe_all(config, existing, failures)
+        return _transcribe_all(config, readable, failures)
 
 
 def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
@@ -379,35 +384,34 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
             print(f"  {result.interrupted}.", file=sys.stderr)
             return 1
 
+        text = render_transcript(
+            result.segments,
+            title=wav.parent.name,
+            model=config.asr.model,
+            language=config.asr.language,
+            audio_duration=result.audio_duration,
+            paragraph_gap=config.output.paragraph_gap,
+            paragraph_target=config.output.paragraph_target,
+            paragraph_max=config.output.paragraph_max,
+        )
         text_path = transcript_path(wav)
-        text_path.write_text(
-            render_transcript(
-                result.segments,
-                title=wav.parent.name,
-                model=config.asr.model,
-                language=config.asr.language,
-                audio_duration=result.audio_duration,
-                paragraph_gap=config.output.paragraph_gap,
-                paragraph_target=config.output.paragraph_target,
-                paragraph_max=config.output.paragraph_max,
-            ),
-            encoding="utf-8",
-        )
+        try:
+            write_transcript(text_path, text)
+        except OSError as error:
+            # Nearly always a full disk, which every recording after this one
+            # would run into as well, each only after its whole recognition.
+            print(f"  error: cannot write {text_path}: {error}", file=sys.stderr)
+            print("  the rest of the batch was not started.", file=sys.stderr)
+            return 1
 
-        ratio = (
-            result.decode_seconds / result.audio_duration
-            if result.audio_duration > 0
-            else 0.0
-        )
         _row("segments", str(len(result.segments)))
-        _row("audio", _hms(result.audio_duration))
+        _row("audio", format_duration(result.audio_duration))
         _row(
             "decoding",
-            f"{_hms(result.decode_seconds)} ({ratio:.2f}x audio length)",
+            f"{format_duration(result.decode_seconds)} "
+            f"({result.decode_ratio:.2f}x audio length)",
         )
         _row("wrote", text_path.name)
-        if config.upload.enabled:
-            _upload(config, text_path, status)
 
     return 1 if failures else 0
 
@@ -436,22 +440,6 @@ def _install_stop_handler(
     signal.signal(signal.SIGINT, handle)
     # A logout or a plain `kill` should end the lecture the same way.
     signal.signal(signal.SIGTERM, handle)
-
-
-def _upload(config: Config, transcript: Path, status: "_StatusLine") -> None:
-    """Copy a written transcript to the remote and say how it went.
-
-    A failure is a warning, not an error: the transcript is safe on disk and
-    the exit code stays what recognition made it.
-    """
-    status.draw(f"  uploading to {config.upload.remote} ...")
-    upload = push_transcript(transcript, config.output.dir, config.upload)
-    status.clear()
-    if upload.ok:
-        _row("uploaded", upload.destination)
-        announce(upload)
-    else:
-        print(f"  warning: not uploaded, {upload.error}", file=sys.stderr)
 
 
 class _StatusLine:
@@ -499,19 +487,6 @@ class _StatusLine:
             self._width = 0
 
 
-def _hms(seconds: float) -> str:
-    """Format a duration as ``H:MM:SS``."""
-    whole = int(seconds)
-    return f"{whole // 3600}:{whole // 60 % 60:02d}:{whole % 60:02d}"
-
-
-def _dbfs(level: float) -> str:
-    """Format a level from 0.0 to 1.0 as decibels below full scale."""
-    if level <= 0.0:
-        return "-inf dBFS"
-    return f"{20 * math.log10(level):.1f} dBFS"
-
-
 def _bar(fraction: float, width: int = 12) -> str:
     """Draw a coarse bar for a fraction from 0.0 to 1.0."""
     filled = round(width * max(0.0, min(1.0, fraction)))
@@ -520,33 +495,25 @@ def _bar(fraction: float, width: int = 12) -> str:
 
 def _meter(level: float, width: int = 12) -> str:
     """Draw a coarse level bar, from -60 dBFS to clipping."""
-    loudness = 0.0
-    if level > 0.0:
-        loudness = (20 * math.log10(level) + 60) / 60
-    return _bar(loudness, width)
+    return _bar(loudness(level), width)
 
 
 def _recording_line(progress: Progress) -> str:
     """Format the live line shown while recording."""
     return (
-        f"  {_hms(progress.elapsed)}   {_dbfs(progress.rms):>11}  "
+        f"  {format_duration(progress.elapsed)}   {dbfs(progress.rms):>11}  "
         f"{_meter(progress.rms)}  {progress.bytes_written / 1_000_000:6.1f} MB"
     )
 
 
 def _decoding_line(decoding: Decoding) -> str:
-    """Format the live line shown while recognising.
-
-    The estimate assumes the rest of the file decodes at the rate the part
-    already done did, which is close enough on one lecture recorded in one
-    sitting.
-    """
+    """Format the live line shown while recognising."""
     done = decoding.fraction
-    speed = decoding.position / decoding.elapsed if decoding.elapsed > 0 else 0.0
-    left = decoding.elapsed / done - decoding.elapsed if done > 0 else 0.0
     return (
-        f"  {done * 100:3.0f}%  {_bar(done)}  {_hms(decoding.position)} of "
-        f"{_hms(decoding.audio_duration)}  {speed:5.1f}x  {_hms(left)} left"
+        f"  {done * 100:3.0f}%  {_bar(done)}  "
+        f"{format_duration(decoding.position)} of "
+        f"{format_duration(decoding.audio_duration)}  {decoding.speed:5.1f}x  "
+        f"{format_duration(decoding.remaining)} left"
     )
 
 
@@ -584,9 +551,6 @@ def _doctor(config: Config) -> int:
 
     print("\noutput")
     _output_report(config)
-
-    print("\nupload")
-    problems += _upload_report(config)
 
     if problems:
         print()
@@ -669,23 +633,6 @@ def _output_report(config: Config) -> None:
     free_gb = shutil.disk_usage(anchor).free / 1_000_000_000
     # An hour of 16 kHz mono PCM is about 115 MB, so this is only ever a sanity check.
     _row("free space", f"{free_gb:.1f} GB")
-
-
-def _upload_report(config: Config) -> list[str]:
-    """Print the upload section of the doctor report and return any problems."""
-    status = upload_status(config.upload)
-    if status.enabled:
-        _row("remote", config.upload.remote)
-    else:
-        _row("remote", "off, no upload.remote in config.toml")
-    _row("rclone", status.rclone or "not found")
-    if status.remote_found is not None:
-        name = config.upload.remote.split(":", 1)[0]
-        _row(
-            "sign-in",
-            f"remote '{name}' {'found' if status.remote_found else 'MISSING'}",
-        )
-    return [status.problem] if status.problem else []
 
 
 def _awake_line(held: bool, detail: str) -> str:

@@ -38,12 +38,8 @@ one core.
   exception, agreed on 2026-09-10: `nvidia-cublas-cu12` as the optional
   `cuda` extra, never a plain dependency -- recording a lecture needs none
   of it and it costs a gigabyte.
-- **Transcripts reach Google Drive through the external `rclone` program**,
-  agreed on 2026-09-28, the same way notifications use `notify-send`: no
-  Python dependency, and the OAuth token lives in rclone's own config, never
-  in this project. Only the `.txt` is uploaded, never the WAV, and only when
-  `[upload]` names a remote. A failed upload is a warning, never an error:
-  the transcript is already safe on disk.
+- **No upload to Google Drive**, dropped on 2026-10-27 at the user's
+  request. Transcripts stay on this machine like the recordings.
 - No abstractions written for a future that has not arrived: no plugins, no
   factories, no base classes with a single implementation.
 - No blanket `try/except` to keep things from crashing. Catch named
@@ -67,7 +63,6 @@ cli.py             argument parsing, printing and wiring, nothing else
 gui.py             the desktop window (Qt), wiring and drawing, nothing else
 launcher.py        desktop menu entry, both platforms
 keep_awake.py      keep the desktop from locking or sleeping while working
-upload.py          transcript -> Google Drive via rclone, plus doctor probe
 ```
 
 `format_text.py` never touches the disk. Neither `cli.py` nor `gui.py` holds
@@ -176,6 +171,12 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   that, an unreported death left it showing a stop button and a frozen clock,
   with the status line still saying `ready` -- and the next press started a
   second recording into a new folder.
+- **A worker's result arrives before its thread has finished.** Freeing the
+  model still runs after `transcribed`, so the window counts as busy until
+  the `finished` slot has dropped the worker (`_busy()`), not until the
+  result. Starting the next job in that gap would replace a running
+  `QThread`, which aborts the process, and the stale `finished` would
+  release the new job's keep-awake.
 - Wayland pairs a window with its menu entry by name, not by process: the
   entry's `StartupWMClass` and `QApplication.setDesktopFileName` both say
   `launcher.DESKTOP_ID`, or the window appears without its icon.
@@ -210,30 +211,6 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   'susssasa{sv}i'`: the unsigned id goes out signed and the empty string array
   as a variant array, and `QDBusInterface` does not convert them either.
   `notify-send` 0.8.8 takes 7 ms, so it runs synchronously.
-- **`upload.remote` must contain a colon.** Without one rclone reads the
-  destination as a local path. Measured: `rclone copyto x.txt
-  gdrive/Lectures/x.txt` exits 0 and leaves `./gdrive/Lectures/x.txt` in the
-  current directory. `config.py` refuses such a remote for that reason.
-- **The rclone remote uses scope `drive.file` and a client ID of the user's
-  own.** rclone's shared client ID is being retired during 2026 (its own
-  docs, and its config prompt says so). The Google app must be published,
-  not left in testing, where the sign-in expires after seven days.
-- **Publishing does not rescue a sign-in made while the app was in
-  testing.** It was still in testing on 2026-09-28; seven days later every
-  upload failed with `invalid_grant: maybe token expired?`. Publishing and
-  then `rclone config reconnect gdrive:` fixed it on 2026-10-06.
-- **With `drive.file` rclone sees only what it created.** Measured:
-  `rclone lsd gdrive:` listed nothing on a Drive holding 67 GB, until
-  `rclone mkdir gdrive:Lectures`. A folder made by hand in the browser is
-  therefore invisible to it, and an upload would create a second folder of
-  the same name beside it.
-- `rclone copyto` creates every missing folder on the way to the
-  destination, and Hangul names and contents arrive intact (read back with
-  `rclone cat`).
-- **The window uploads before it reports the transcript, not after.** The
-  `transcribed` slot frees the buttons; a second transcription started
-  while the first thread still uploaded would replace a running `QThread`,
-  which aborts the process.
 
 ## Recognition settings that must not drift
 
@@ -294,5 +271,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | G | `gui.py`, `scribe gui`: record and transcribe in one window | done |
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
-| U | `upload.py`: transcripts to Google Drive through rclone, `[upload]` in config, doctor section, notification | done — verified on Linux, CLI and window; the Windows branch is unrun |
 | R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |

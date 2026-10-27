@@ -115,6 +115,32 @@ class Decoding:
             return 1.0
         return max(0.0, min(1.0, self.position / self.audio_duration))
 
+    @property
+    def remaining(self) -> float:
+        """Wall-clock seconds the rest of the recording is likely to take.
+
+        Returns:
+            The time left if the rest decodes at the pace the part already
+            done did, which is close enough on one lecture recorded in one
+            sitting. Zero until there is a pace to go by.
+        """
+        done = self.fraction
+        if done <= 0.0:
+            return 0.0
+        return self.elapsed / done - self.elapsed
+
+    @property
+    def speed(self) -> float:
+        """Seconds of audio recognised per second of decoding so far.
+
+        Returns:
+            Above 1.0 when recognition runs faster than real time. Zero
+            before any time has passed to measure it by.
+        """
+        if self.elapsed <= 0.0:
+            return 0.0
+        return self.position / self.elapsed
+
 
 @dataclass(frozen=True, slots=True)
 class Transcription:
@@ -137,6 +163,18 @@ class Transcription:
     audio_duration: float
     decode_seconds: float
     interrupted: str | None = None
+
+    @property
+    def decode_ratio(self) -> float:
+        """How long decoding took against the length of the audio.
+
+        Returns:
+            Below 1.0 when recognition ran faster than real time. Zero for a
+            recording of no length rather than dividing by it.
+        """
+        if self.audio_duration <= 0.0:
+            return 0.0
+        return self.decode_seconds / self.audio_duration
 
 
 def compute_type(gpu: bool) -> str:
@@ -373,6 +411,31 @@ def transcript_path(wav: Path) -> Path:
         ``<folder>/<folder name>.txt``.
     """
     return wav.parent / f"{wav.parent.name}.txt"
+
+
+def write_transcript(path: Path, text: str) -> None:
+    """Write a transcript all or nothing.
+
+    The text goes to a file beside it first and is renamed over ``path``
+    only once complete. Writing in place empties an earlier transcript
+    before the first byte, so a disk filling part way through would leave a
+    cut-off transcript that opens like a whole one.
+
+    Args:
+        path: Where the transcript goes, as :func:`transcript_path` names it.
+        text: The rendered transcript.
+
+    Raises:
+        OSError: It could not be written. A transcript already at ``path``
+            is left as it was.
+    """
+    partial = path.with_name(f"{path.name}.partial")
+    try:
+        partial.write_text(text, encoding="utf-8")
+        partial.replace(path)
+    except OSError:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def earlier_transcript(wav: Path) -> Path | None:

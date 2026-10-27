@@ -59,9 +59,11 @@ from lecture_scribe.audio_capture import (
     LoopbackDevice,
     Progress,
     Recording,
+    dbfs,
     inspect_recording,
     lecture_dir,
     list_loopback_devices,
+    loudness,
     record_loopback,
     recording_path,
     resolve_device,
@@ -69,6 +71,7 @@ from lecture_scribe.audio_capture import (
 from lecture_scribe.config import Config, ConfigError, load_config
 from lecture_scribe.format_text import (
     Passage,
+    format_duration,
     format_timecode,
     read_transcript,
     render_transcript,
@@ -84,16 +87,13 @@ from lecture_scribe.transcribe import (
     load_model,
     transcribe,
     transcript_path,
+    write_transcript,
 )
-from lecture_scribe.upload import Upload, announce, push_transcript
 
 _GLYPH = 10
 """Side of a button's painted icon, in logical pixels."""
 _GLYPH_GAP = 6
 """Space between the icon and the label; Qt's own is a cramped 4 px under Fusion."""
-
-_FLOOR_DBFS = -60.0
-"""Level shown as an empty meter; below this a lecture is inaudible anyway."""
 
 # Korean is the point of the tool, so a CJK family is named in every stack
 # rather than left to whatever Qt happens to fall back to per character.
@@ -285,24 +285,6 @@ class _RecordWorker(QThread):
         self.progressed.emit(progress)
 
 
-def _with_upload(message: str, upload: Upload | None) -> tuple[str, bool]:
-    """Add the outcome of an upload to the status line.
-
-    Args:
-        message: What recognition reported.
-        upload: The upload, or ``None`` when upload is off.
-
-    Returns:
-        The line, and whether it needs attention. A failed upload does: the
-        transcript is safe, but the copy the user expects on Drive is not.
-    """
-    if upload is None:
-        return message, False
-    if upload.ok:
-        return f"{message} · uploaded to {upload.destination}", False
-    return f"{message} · not uploaded, {upload.error}", True
-
-
 class _TranscribeWorker(QThread):
     """Loads the model and transcribes one recording off the GUI thread.
 
@@ -312,8 +294,7 @@ class _TranscribeWorker(QThread):
 
     staged = Signal(str)
     progressed = Signal(Decoding)
-    # The last is an Upload, or None when upload is off; Signal has no Optional.
-    transcribed = Signal(Path, str, Transcription, object)
+    transcribed = Signal(Path, str, Transcription)
     stopped = Signal(str)
     failed = Signal(str)
 
@@ -382,20 +363,11 @@ class _TranscribeWorker(QThread):
         )
         path = transcript_path(self._wav)
         try:
-            path.write_text(text, encoding="utf-8")
+            write_transcript(path, text)
         except OSError as error:
             self.failed.emit(f"cannot write {path}: {error}")
             return
-
-        # Uploaded before the result is reported rather than after: the
-        # window frees its buttons on that report, and a second transcription
-        # started meanwhile would replace this thread while it still runs.
-        upload: Upload | None = None
-        if self._config.upload.enabled:
-            self.staged.emit(f"uploading to {self._config.upload.remote} ...")
-            upload = push_transcript(path, self._config.output.dir, self._config.upload)
-            announce(upload)
-        self.transcribed.emit(path, text, result, upload)
+        self.transcribed.emit(path, text, result)
 
 
 class _Combo(QComboBox):
@@ -428,7 +400,6 @@ class _Combo(QComboBox):
         )
         painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
 
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(_MUTED if self.isEnabled() else _FAINT))
@@ -611,7 +582,10 @@ class _LevelMeter(QWidget):
 
     _HEIGHT = 6
     _FALL = 0.035
-    """Share of the bar the level may sink per block, about 1.6 of it a second."""
+    """Share of the bar the level may sink per block, about half of it a second.
+
+    A block is 1024 frames, which at the default 16 kHz is 64 ms.
+    """
     _PEAK_FALL = 0.004
 
     def __init__(self) -> None:
@@ -629,7 +603,7 @@ class _LevelMeter(QWidget):
             rms: Block level from 0.0 to 1.0.
         """
         # Rises at once but sinks gradually, as a hardware meter does. Blocks
-        # arrive every 21 ms, and following each one exactly makes the bar
+        # arrive every 64 ms, and following each one exactly makes the bar
         # flicker between syllables instead of showing speech.
         self._level = max(loudness(rms), self._level - self._FALL)
         # The peak marker sinks slower still, so a brief loud passage stays
@@ -765,7 +739,7 @@ class _Window(QWidget):
         layout.addLayout(form)
         layout.addSpacing(34)
 
-        self._clock = QLabel(_clock(0.0))
+        self._clock = QLabel(format_duration(0.0))
         self._clock.setObjectName("clock")
         self._clock.setAlignment(Qt.AlignmentFlag.AlignCenter)
         clock_font = QFont()
@@ -865,6 +839,8 @@ class _Window(QWidget):
 
     def _start_recording(self) -> None:
         """Create the lecture folder and hand the capture to a worker."""
+        if self._busy():
+            return
         device = self._devices[self._device_box.currentIndex()]
         try:
             folder = lecture_dir(
@@ -909,11 +885,11 @@ class _Window(QWidget):
     def _on_progress(self, progress: Progress) -> None:
         """Redraw the clock, meter and level readout."""
         self._elapsed = progress.elapsed
-        self._clock.setText(_clock(progress.elapsed))
+        self._clock.setText(format_duration(progress.elapsed))
         self._chip.breathe(progress.elapsed)
         self._meter.set_rms(progress.rms)
         self._levels.setText(
-            f"{_dbfs(progress.rms)}   ·   {progress.bytes_written / 1_000_000:.1f} MB"
+            f"{dbfs(progress.rms)}   ·   {progress.bytes_written / 1_000_000:.1f} MB"
         )
 
     def _on_warning(self, message: str) -> None:
@@ -924,9 +900,9 @@ class _Window(QWidget):
         """Report the finished file and offer to transcribe it."""
         self._recording = False
         self._meter.reset()
-        self._clock.setText(_clock(recording.duration))
+        self._clock.setText(format_duration(recording.duration))
         self._levels.setText(
-            f"peak {_dbfs(recording.peak)}   ·   "
+            f"peak {dbfs(recording.peak)}   ·   "
             f"{recording.path.stat().st_size / 1_000_000:.1f} MB"
         )
         if recording.interrupted is not None:
@@ -940,7 +916,7 @@ class _Window(QWidget):
             )
         else:
             self._say(
-                f"stopped after {_clock(recording.duration)} · "
+                f"stopped after {format_duration(recording.duration)} · "
                 f"{_short_path(recording.path)}",
                 path=recording.path,
             )
@@ -979,7 +955,7 @@ class _Window(QWidget):
                 problem=True,
                 path=self._wav,
             )
-            self._refresh()
+        self._refresh()
 
     def _mark_moment(self) -> None:
         """Flag the current offset so its paragraph is prefixed with ``>>>``."""
@@ -998,7 +974,7 @@ class _Window(QWidget):
         copied in, renamed, recorded on another machine -- and after a
         restart the window has no recording of its own to work on either.
         """
-        if self._recording or self._transcribing:
+        if self._busy():
             return
 
         chosen, _selected_filter = QFileDialog.getOpenFileName(
@@ -1023,7 +999,7 @@ class _Window(QWidget):
         self._marks = []
         self._elapsed = 0.0
         self._meter.reset()
-        self._clock.setText(_clock(existing.duration))
+        self._clock.setText(format_duration(existing.duration))
         self._levels.setText(f"{existing.size_bytes / 1_000_000:.1f} MB")
         self._show_earlier_transcript(existing)
         self._refresh()
@@ -1071,7 +1047,7 @@ class _Window(QWidget):
             self._text.setEnabled(False)
             self._transcriber.stop()
             return
-        if self._wav is None:
+        if self._wav is None or self._busy():
             return
         self._transcript.clear()
         worker = _TranscribeWorker(self._config, self._wav, list(self._marks))
@@ -1095,17 +1071,13 @@ class _Window(QWidget):
         double digit minutes on a full lecture. What the pane shows here is
         replaced by the finished transcript once the last segment is in.
         """
-        self._clock.setText(_clock(decoding.position))
+        self._clock.setText(format_duration(decoding.position))
         self._meter.set_fraction(decoding.fraction)
         self._chip.show_state(f"transcribing {decoding.fraction * 100:.0f}%")
-        left = (
-            decoding.elapsed / decoding.fraction - decoding.elapsed
-            if decoding.fraction > 0.0
-            else 0.0
-        )
         self._levels.setText(
             f"{decoding.fraction * 100:.0f}%   ·   "
-            f"{_plural(decoding.segments, 'segment')}   ·   {_clock(left)} left"
+            f"{_plural(decoding.segments, 'segment')}   ·   "
+            f"{format_duration(decoding.remaining)} left"
         )
         # The end of the segment rather than its start: near enough for a
         # preview the finished render is about to replace.
@@ -1113,25 +1085,18 @@ class _Window(QWidget):
             format_timecode(decoding.position).strip("[]"), decoding.text
         )
 
-    def _on_transcribed(
-        self, path: Path, text: str, result: Transcription, upload: Upload | None
-    ) -> None:
-        """Show the finished transcript, how long decoding took, and the upload."""
+    def _on_transcribed(self, path: Path, text: str, result: Transcription) -> None:
+        """Show the finished transcript and how long decoding took."""
         self._transcribing = False
         self._meter.reset()
-        self._clock.setText(_clock(result.audio_duration))
+        self._clock.setText(format_duration(result.audio_duration))
         self._transcript.show_transcript(text)
-        ratio = (
-            result.decode_seconds / result.audio_duration
-            if result.audio_duration > 0
-            else 0.0
-        )
         message = (
             f"wrote {_short_path(path)} · {_plural(len(result.segments), 'segment')} · "
-            f"{_clock(result.decode_seconds)} ({ratio:.2f}x audio length)"
+            f"{format_duration(result.decode_seconds)} "
+            f"({result.decode_ratio:.2f}x audio length)"
         )
-        line, problem = _with_upload(message, upload)
-        self._say(line, problem=problem, path=path)
+        self._say(message, path=path)
         self._refresh()
 
     def _on_transcribe_stopped(self, message: str) -> None:
@@ -1149,6 +1114,7 @@ class _Window(QWidget):
     def _on_transcribe_failed(self, message: str) -> None:
         """Report a recognition that could not be completed."""
         self._transcribing = False
+        self._meter.reset()
         self._say(message, problem=True)
         self._refresh()
 
@@ -1165,12 +1131,13 @@ class _Window(QWidget):
         self._let_sleep()
         if self._transcribing:
             self._transcribing = False
+            self._meter.reset()
             self._say(
                 "recognition ended without saying why; the recording itself "
                 "is untouched and can be transcribed again",
                 problem=True,
             )
-            self._refresh()
+        self._refresh()
         if self._closing:
             # The window is already hidden and the worker is now finished, so
             # there is no thread left to be destroyed under a running loop.
@@ -1187,9 +1154,21 @@ class _Window(QWidget):
             self._awake.release()
             self._awake = None
 
+    def _busy(self) -> bool:
+        """Whether a worker thread exists, running or still winding down.
+
+        A worker reports its result before its thread has finished: freeing
+        a GPU model still takes a moment after the last segment. Starting
+        the next job in that gap would replace a running QThread, which
+        aborts the process, and the stale ``finished`` would then release
+        the new job's keep-awake. Only the ``finished`` slots drop a worker,
+        so this stays true until that has happened.
+        """
+        return self._recorder is not None or self._transcriber is not None
+
     def _refresh(self) -> None:
         """Bring every control into line with what the window is doing."""
-        idle = not self._recording and not self._transcribing
+        idle = not self._busy()
         named = bool(self._course.text().strip())
         self._record.setText("stop" if self._recording else "record")
         self._record.setIcon(
@@ -1254,9 +1233,11 @@ class _Window(QWidget):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        if self._transcriber is not None:
+            # Running, or past its result and still freeing the model: either
+            # way the window goes now and the process once `finished` arrives.
             self._closing = True
-            if self._transcriber is not None:
-                self._transcriber.stop()
+            self._transcriber.stop()
             self.hide()
             event.ignore()
             return
@@ -1266,21 +1247,6 @@ class _Window(QWidget):
             self._recorder.wait()
         self._let_sleep()
         event.accept()
-
-
-def loudness(rms: float) -> float:
-    """Map a level to the 0.0 to 1.0 range the meter is drawn in.
-
-    Args:
-        rms: Level from 0.0 to 1.0, as reported while recording.
-
-    Returns:
-        How full the meter should be, with ``_FLOOR_DBFS`` reading empty.
-    """
-    if rms <= 0.0:
-        return 0.0
-    filled = (20 * math.log10(rms) - _FLOOR_DBFS) / -_FLOOR_DBFS
-    return max(0.0, min(1.0, filled))
 
 
 def run(config: Config) -> int:
@@ -1452,19 +1418,6 @@ def _plural(count: int, noun: str) -> str:
         The count and the noun together.
     """
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
-
-
-def _clock(seconds: float) -> str:
-    """Format a duration as ``H:MM:SS``."""
-    whole = int(seconds)
-    return f"{whole // 3600}:{whole // 60 % 60:02d}:{whole % 60:02d}"
-
-
-def _dbfs(level: float) -> str:
-    """Format a level from 0.0 to 1.0 as decibels below full scale."""
-    if level <= 0.0:
-        return "-inf dBFS"
-    return f"{20 * math.log10(level):.1f} dBFS"
 
 
 if __name__ == "__main__":
