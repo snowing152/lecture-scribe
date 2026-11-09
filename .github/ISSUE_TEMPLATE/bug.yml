@@ -1,0 +1,66 @@
+name: Bug report
+description: Something does not work as the README says it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not attach a lecture recording or
+        transcript you are not allowed to share.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Where
+      options:
+        - Recording
+        - Transcription
+        - The window
+        - The command line
+        - Menu entry / shortcut (scribe launcher)
+        - Install
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: os-detail
+    attributes:
+      label: Distribution or Windows version, and desktop
+      placeholder: e.g. Arch, KDE Plasma 6, PipeWire / Windows 11 24H2
+  - type: dropdown
+    id: device
+    attributes:
+      label: Transcribing on
+      options:
+        - CPU
+        - NVIDIA GPU
+        - Not relevant (recording only)
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `scribe doctor`
+      description: It lists the audio devices, the model and GPU state, and the Python environment.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Error message or console output
+      description: Anything printed by `scribe`, or shown in the window's status line.
+      render: text

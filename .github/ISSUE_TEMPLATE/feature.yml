@@ -1,0 +1,33 @@
+name: Suggestion
+description: An idea for something the tool should do differently.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some things are out of scope on purpose: anything that sends audio or
+        text off the computer, and automatic language detection. Real-time
+        transcription, speaker separation, translation and summaries are
+        welcome if they run locally. Details are in
+        [CONTRIBUTING.md](https://github.com/snowing152/lecture-scribe/blob/main/.github/CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What gets in your way today, in your own lectures.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like instead
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: It works without sending anything off the computer.
+          required: true
+        - label: It needs a new dependency.
