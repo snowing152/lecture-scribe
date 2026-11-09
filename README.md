@@ -46,9 +46,9 @@ a timecode on every paragraph.
 
 - **Records the computer, not the room.** No microphone involved: background
   noise, typing and your own voice stay out of the recording.
-- **Made for Korean.** The language is fixed to Korean, which avoids the
-  model mistaking the first seconds for Japanese and getting the whole file
-  wrong.
+- **Made for Korean.** The language is Korean unless you pick English, and
+  it is never guessed, which avoids the model mistaking the first seconds
+  for Japanese and getting the whole file wrong.
 - **Readable, not a wall of text.** The text is split into paragraphs, each
   with a timecode, and the moments you marked stand out.
 - **Never loses a recording.** Audio is written to disk as it comes in, so

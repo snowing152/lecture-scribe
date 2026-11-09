@@ -82,6 +82,7 @@ from lecture_scribe.transcribe import (
     Decoding,
     Transcription,
     TranscriptionError,
+    check_language,
     compute_type,
     earlier_transcript,
     load_model,
@@ -347,6 +348,11 @@ class _TranscribeWorker(QThread):
                 "recognition was stopped before it began; the recording itself "
                 "is untouched and can be transcribed again"
             )
+            return
+        try:
+            check_language(model, asr.language)
+        except TranscriptionError as error:
+            self.failed.emit(str(error))
             return
 
         # The decoder scans the whole file for speech before the first
@@ -854,7 +860,7 @@ class _Window(QWidget):
         open_file = QShortcut(QKeySequence("Ctrl+O"), self)
         open_file.activated.connect(self._open_recording)
 
-    def _load_devices(self) -> LoopbackDevice | None:
+    def _load_devices(self, *, starting: bool = False) -> LoopbackDevice | None:
         """Read the output devices afresh and select the one to record from.
 
         Read again before every recording rather than once at startup:
@@ -863,6 +869,10 @@ class _Window(QWidget):
         device picked by hand stays picked for as long as it exists;
         otherwise the configured choice applies, ``auto`` following the
         system default to wherever it has moved.
+
+        Args:
+            starting: Whether record was just pressed, which is the only
+                time a vanished device needs a second press to be explained.
 
         Returns:
             The selected device, or ``None`` when there is none to record
@@ -899,9 +909,10 @@ class _Window(QWidget):
             return None
         self._device_box.setCurrentIndex(devices.index(selected))
         if picked is not None:
+            advice = "; press record again to use it" if starting else ""
             self._say(
                 f"'{picked.name}' is gone, so the list is back on "
-                f"'{selected.name}'; press record again to use it",
+                f"'{selected.name}'{advice}",
                 problem=True,
             )
             return None
@@ -956,7 +967,7 @@ class _Window(QWidget):
         """Create the lecture folder and hand the capture to a worker."""
         if self._busy():
             return
-        device = self._load_devices()
+        device = self._load_devices(starting=True)
         if device is None:
             self._refresh()
             return
@@ -1023,7 +1034,16 @@ class _Window(QWidget):
             f"peak {dbfs(recording.peak)}   ·   "
             f"{recording.path.stat().st_size / 1_000_000:.1f} MB"
         )
-        if recording.interrupted is not None:
+        if recording.duration == 0.0:
+            # Stopped before the first block arrived. The empty file stays on
+            # disk like any recording, but there is nothing in it to recognise.
+            self._wav = None
+            self._say(
+                "stopped before any audio arrived, so there is nothing to "
+                f"transcribe · {_short_path(recording.path)}",
+                path=recording.path,
+            )
+        elif recording.interrupted is not None:
             self._say(recording.interrupted, problem=True)
         elif recording.mean_rms < self._config.audio.silence_rms:
             self._say(
@@ -1372,6 +1392,8 @@ class _Window(QWidget):
                 "Recognition is still running.\n"
                 "Stopping it throws away what has been recognised so far; the "
                 "recording itself is safe on disk. Close anyway?",
+                # No here too, so that Enter means the same in both prompts.
+                defaultButton=QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()

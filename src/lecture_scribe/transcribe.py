@@ -301,6 +301,37 @@ def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped librar
         raise TranscriptionError(f"cannot load model '{model}': {error}") from error
 
 
+def check_language(model: Any, language: str) -> None:  # noqa: ANN401 (untyped library)
+    """Make sure the model can recognise the language it is about to be given.
+
+    faster-whisper checks the code only after it has decoded the whole
+    recording and run the VAD over it, so a typo such as ``kr`` for ``ko``
+    would cost half a minute per file before failing. An English-only model
+    given another language is not refused at all: it switches to English and
+    says so only in a log nobody reads.
+
+    Args:
+        model: A model from :func:`load_model`.
+        language: Spoken language, as a Whisper language code.
+
+    Raises:
+        TranscriptionError: The model does not know the language.
+    """
+    supported: list[str] = list(model.supported_languages)
+    if language in supported:
+        return
+    if supported == ["en"]:
+        raise TranscriptionError(
+            f"this model recognises English only, so language '{language}' "
+            "cannot be used; choose a multilingual model such as large-v3, "
+            "or the language en"
+        )
+    raise TranscriptionError(
+        f"'{language}' is not a language code Whisper knows; "
+        "Korean is ko and English is en"
+    )
+
+
 def transcribe(
     model: Any,  # noqa: ANN401 (untyped library)
     wav: Path,

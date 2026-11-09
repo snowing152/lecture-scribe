@@ -5,6 +5,7 @@ and the model are replaced; only the window's own bookkeeping is under test.
 """
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from lecture_scribe import gui
-from lecture_scribe.audio_capture import LoopbackDevice
+from lecture_scribe.audio_capture import LoopbackDevice, Recording
 from lecture_scribe.config import AsrConfig, Config, OutputConfig
 
 _SPEAKERS = LoopbackDevice(name="Speakers", id="alsa.speakers", is_default=True)
@@ -116,6 +117,95 @@ def test_a_recording_that_never_started_is_not_offered_for_transcription(
 
     assert window._wav is None
     assert not window._text.isEnabled()
+
+
+def test_a_recording_stopped_before_any_audio_is_not_offered(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    wav = tmp_path / "os.wav"
+    wav.touch()
+    window._wav = wav
+    window._recording = True
+
+    window._on_recorded(
+        Recording(path=wav, duration=0.0, peak=0.0, mean_rms=0.0, interrupted=None)
+    )
+
+    assert window._wav is None
+    assert not window._text.isEnabled()
+    assert "nothing to transcribe" in window._status.text()
+    # The file itself is a recording like any other and stays where it is.
+    assert wav.exists()
+
+
+def test_opening_the_list_does_not_ask_for_a_second_record_press(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    window._on_device_picked(1)
+    devices.devices = [_SPEAKERS]
+
+    window._on_device_list_opening()
+
+    assert "'HDMI' is gone" in window._status.text()
+    assert "press record" not in window._status.text()
+
+
+def test_closing_during_recognition_defaults_to_no(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _window(tmp_path)
+    window._transcribing = True
+    asked: list[object] = []
+
+    def question(
+        _parent: QWidget, _title: str, text: str, **kwargs: object
+    ) -> QMessageBox.StandardButton:
+        asked.append(kwargs.get("defaultButton"))
+        assert "Recognition is still running" in text
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "question", question)
+    event = QCloseEvent()
+
+    window.closeEvent(event)
+
+    assert asked == [QMessageBox.StandardButton.No]
+    assert not event.isAccepted()
+
+
+def test_an_unknown_language_fails_before_the_recording_is_read(
+    app: QApplication,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config(asr=AsrConfig(language="kr"))
+    worker = gui._TranscribeWorker(config, tmp_path / "os.wav", [])
+
+    @dataclass
+    class Model:
+        supported_languages: tuple[str, ...] = ("en", "ko")
+
+    def never(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the recording should not be read")
+
+    monkeypatch.setattr(gui, "load_model", lambda *_args, **_kwargs: Model())
+    monkeypatch.setattr(gui, "transcribe", never)
+    failed: list[str] = []
+    worker.failed.connect(failed.append)
+
+    worker.run()
+
+    assert len(failed) == 1
+    assert "'kr' is not a language code" in failed[0]
 
 
 def test_closing_during_a_recording_asks_and_defaults_to_no(
