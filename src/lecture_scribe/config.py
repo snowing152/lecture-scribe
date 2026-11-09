@@ -106,7 +106,7 @@ def load_config(path: Path | None = None) -> Config:
 
     Raises:
         ConfigError: The file is not valid TOML, holds an unknown section or
-            key, or a value has the wrong type.
+            key, or a value has the wrong type or is out of range.
     """
     config_path = Path(CONFIG_FILENAME) if path is None else path
     if not config_path.is_file():
@@ -168,8 +168,11 @@ def _audio(raw: Mapping[str, Any]) -> AudioConfig:
     default = AudioConfig()
     return AudioConfig(
         device=_str("audio", raw, "device", default.device),
-        sample_rate=_int("audio", raw, "sample_rate", default.sample_rate),
-        silence_rms=_float("audio", raw, "silence_rms", default.silence_rms),
+        sample_rate=_int("audio", raw, "sample_rate", default.sample_rate, minimum=1),
+        # Levels run from 0.0 to full scale at 1.0, and zero turns the check off.
+        silence_rms=_float(
+            "audio", raw, "silence_rms", default.silence_rms, minimum=0.0, below=1.0
+        ),
     )
 
 
@@ -181,7 +184,7 @@ def _asr(raw: Mapping[str, Any]) -> AsrConfig:
         model=_str("asr", raw, "model", default.model),
         gpu=_bool("asr", raw, "gpu", default.gpu),
         language=_str("asr", raw, "language", default.language),
-        beam_size=_int("asr", raw, "beam_size", default.beam_size),
+        beam_size=_int("asr", raw, "beam_size", default.beam_size, minimum=1),
     )
 
 
@@ -189,13 +192,19 @@ def _output(raw: Mapping[str, Any]) -> OutputConfig:
     """Build the ``[output]`` section."""
     _reject_unknown("output", raw, _names(OutputConfig))
     default = OutputConfig()
+    # A negative length passes no error further down: a negative gap quietly
+    # makes every segment a paragraph of its own.
     return OutputConfig(
         dir=_path("output", raw, "dir", default.dir),
-        paragraph_gap=_float("output", raw, "paragraph_gap", default.paragraph_gap),
-        paragraph_target=_float(
-            "output", raw, "paragraph_target", default.paragraph_target
+        paragraph_gap=_float(
+            "output", raw, "paragraph_gap", default.paragraph_gap, minimum=0.0
         ),
-        paragraph_max=_float("output", raw, "paragraph_max", default.paragraph_max),
+        paragraph_target=_float(
+            "output", raw, "paragraph_target", default.paragraph_target, minimum=0.0
+        ),
+        paragraph_max=_float(
+            "output", raw, "paragraph_max", default.paragraph_max, minimum=0.0
+        ),
     )
 
 
@@ -246,21 +255,41 @@ def _bool(section: str, raw: Mapping[str, Any], key: str, default: bool) -> bool
     return value
 
 
-def _int(section: str, raw: Mapping[str, Any], key: str, default: int) -> int:
-    """Read an integer value."""
+def _int(
+    section: str, raw: Mapping[str, Any], key: str, default: int, *, minimum: int
+) -> int:
+    """Read an integer value no smaller than ``minimum``."""
     value = raw.get(key, default)
     # bool is a subclass of int, so `gpu = true` must not pass as a number.
     if isinstance(value, bool) or not isinstance(value, int):
         raise _wrong_type(section, key, "an integer", value)
+    if value < minimum:
+        raise ConfigError(f"{section}.{key} must be at least {minimum}, got {value}")
     return value
 
 
-def _float(section: str, raw: Mapping[str, Any], key: str, default: float) -> float:
-    """Read a number, accepting the integer spelling of it."""
+def _float(
+    section: str,
+    raw: Mapping[str, Any],
+    key: str,
+    default: float,
+    *,
+    minimum: float,
+    below: float | None = None,
+) -> float:
+    """Read a number no smaller than ``minimum``, accepting its integer spelling.
+
+    ``below``, when given, is an upper bound the value must stay under.
+    """
     value = raw.get(key, default)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _wrong_type(section, key, "a number", value)
-    return float(value)
+    number = float(value)
+    if number < minimum:
+        raise ConfigError(f"{section}.{key} must be at least {minimum}, got {value}")
+    if below is not None and number >= below:
+        raise ConfigError(f"{section}.{key} must be below {below}, got {value}")
+    return number
 
 
 def _path(section: str, raw: Mapping[str, Any], key: str, default: Path) -> Path:

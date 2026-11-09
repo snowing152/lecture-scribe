@@ -100,6 +100,38 @@ def test_boolean_does_not_pass_as_a_number(tmp_path: Path) -> None:
         load_config(path)
 
 
+@pytest.mark.parametrize(
+    ("body", "complaint"),
+    [
+        ("[audio]\nsample_rate = 0\n", r"audio\.sample_rate must be at least 1"),
+        ("[audio]\nsilence_rms = -1\n", r"audio\.silence_rms must be at least"),
+        ("[audio]\nsilence_rms = 1\n", r"audio\.silence_rms must be below"),
+        ("[asr]\nbeam_size = 0\n", r"asr\.beam_size must be at least 1"),
+        ("[output]\nparagraph_gap = -5\n", r"output\.paragraph_gap must be at least"),
+        ("[output]\nparagraph_max = -1.5\n", r"output\.paragraph_max must be at least"),
+    ],
+)
+def test_out_of_range_value_is_rejected(
+    tmp_path: Path, body: str, complaint: str
+) -> None:
+    with pytest.raises(ConfigError, match=complaint):
+        load_config(_write(tmp_path, body))
+
+
+def test_zero_still_turns_the_optional_checks_off(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "[audio]\nsilence_rms = 0\n"
+        "[output]\nparagraph_gap = 0\nparagraph_target = 0\nparagraph_max = 0\n",
+    )
+
+    config = load_config(path)
+
+    assert config.audio.silence_rms == 0.0
+    assert config.output.paragraph_target == 0.0
+    assert config.output.paragraph_max == 0.0
+
+
 def test_broken_toml_is_reported_as_such(tmp_path: Path) -> None:
     path = _write(tmp_path, "[audio\n")
 

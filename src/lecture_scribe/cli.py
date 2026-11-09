@@ -44,6 +44,7 @@ from lecture_scribe.transcribe import (
     gpu_status,
     load_model,
     model_status,
+    shared_transcripts,
     transcribe,
     transcript_path,
     write_transcript,
@@ -214,6 +215,12 @@ def _rec(config: Config, course: str) -> int:
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    # Installed before anything is created: asking the desktop to stay awake
+    # can take seconds, and a Ctrl+C in that gap used to end in a traceback
+    # and an empty lecture folder.
+    stop = threading.Event()
+    _install_stop_handler(stop)
+
     try:
         folder.mkdir(parents=True)
     except OSError as error:
@@ -222,6 +229,17 @@ def _rec(config: Config, course: str) -> int:
     target = recording_path(folder)
 
     awake = keep_awake("recording a lecture")
+    if stop.is_set():
+        awake.release()
+        # rmdir removes only an empty directory, so no recording can go with
+        # it; if something did land in the folder, it is left alone.
+        try:
+            folder.rmdir()
+        except OSError:
+            print(f"stopped before recording began; {folder} was left as it is")
+            return 130
+        print("stopped before recording began; nothing was created")
+        return 130
     print(f"recording to {target}")
     _row("device", f"{device.name} (loopback)")
     _row("format", f"{config.audio.sample_rate} Hz mono, 16 bit")
@@ -229,8 +247,6 @@ def _rec(config: Config, course: str) -> int:
     _row("stop", "Ctrl+C")
     print()
 
-    stop = threading.Event()
-    _install_stop_handler(stop)
     status = _StatusLine()
 
     def show(progress: Progress) -> None:
@@ -274,8 +290,9 @@ def _text(config: Config, wavs: list[Path]) -> int:
     """Transcribe one or more recordings, writing a readable transcript of each.
 
     Files are checked before the model is loaded: large-v3 can take a while
-    to load or download, and a typo in a filename, or a file that is not a
-    recording at all, should fail in an instant rather than after that wait
+    to load or download, and a typo in a filename, a file that is not a
+    recording at all, or two recordings that would write one transcript,
+    should fail in an instant rather than after that wait
     -- doubly so since a model already loading in another process blocks a
     second load on the same cache until it finishes.
 
@@ -310,6 +327,22 @@ def _text(config: Config, wavs: list[Path]) -> int:
             failures += 1
             continue
         readable.append(wav)
+
+    # None of a clashing group is transcribed: which one the user wanted
+    # written is not something to guess, and each would cost a whole
+    # recognition only to be overwritten by the next.
+    clashes = shared_transcripts(readable)
+    for target, group in clashes.items():
+        names = ", ".join(str(wav) for wav in group)
+        print(
+            f"error: {names} would all be transcribed to {target}, each over "
+            "the one before; give each recording a folder of its own",
+            file=sys.stderr,
+        )
+        failures += len(group)
+    clashing = {wav for group in clashes.values() for wav in group}
+    readable = [wav for wav in readable if wav not in clashing]
+
     if not readable:
         return 1
 

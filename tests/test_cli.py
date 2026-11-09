@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 from lecture_scribe import cli
 from lecture_scribe.config import Config
@@ -32,6 +34,34 @@ def test_a_file_that_is_not_a_recording_fails_before_the_model_loads(
 
     assert cli._text(Config(), [junk]) == 1
     assert "cannot read" in capsys.readouterr().err
+
+
+def test_recordings_that_would_share_a_transcript_are_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    folder = tmp_path / "Downloads"
+    folder.mkdir()
+    first, second = folder / "a.wav", folder / "b.wav"
+    for wav in (first, second):
+        sf.write(wav, np.zeros(1600, dtype=np.float32), 16000)
+    own = _lecture(tmp_path, "os")
+    sf.write(own, np.zeros(1600, dtype=np.float32), 16000)
+    handed: list[list[Path]] = []
+
+    def collect(_config: Config, wavs: list[Path], failures: int) -> int:
+        handed.append(wavs)
+        return 1 if failures else 0
+
+    monkeypatch.setattr(cli, "_transcribe_all", collect)
+
+    code = cli._text(Config(), [first, own, second])
+
+    # Only the recording with a folder of its own goes on to be recognised.
+    assert code == 1
+    assert handed == [[own]]
+    assert "Downloads.txt" in capsys.readouterr().err
 
 
 def test_a_transcript_that_cannot_be_written_stops_the_batch(

@@ -18,6 +18,7 @@ from lecture_scribe.transcribe import (
     gpu_status,
     hub_cache_dir,
     model_status,
+    shared_transcripts,
     transcribe,
     transcript_path,
     write_transcript,
@@ -33,6 +34,30 @@ def test_transcript_is_named_after_the_folder_as_it_is_now(tmp_path: Path) -> No
     folder = tmp_path / "2026-09-14_컴넷-2-2"
 
     assert transcript_path(folder / "audio.wav") == folder / "2026-09-14_컴넷-2-2.txt"
+
+
+def test_recordings_in_one_folder_share_a_transcript(tmp_path: Path) -> None:
+    first = tmp_path / "Downloads" / "a.wav"
+    second = tmp_path / "Downloads" / "b.wav"
+    alone = tmp_path / "2026-09-14_os" / "2026-09-14_os.wav"
+
+    clashes = shared_transcripts([first, alone, second])
+
+    assert clashes == {(tmp_path / "Downloads" / "Downloads.txt"): [first, second]}
+
+
+def test_one_folder_spelled_two_ways_is_still_one_folder(tmp_path: Path) -> None:
+    (tmp_path / "os").mkdir()
+    plain = tmp_path / "os" / "a.wav"
+    detour = tmp_path / "os" / ".." / "os" / "b.wav"
+
+    assert list(shared_transcripts([plain, detour]).values()) == [[plain, detour]]
+
+
+def test_recordings_in_separate_folders_share_nothing(tmp_path: Path) -> None:
+    wavs = [tmp_path / "one" / "one.wav", tmp_path / "two" / "two.wav"]
+
+    assert shared_transcripts(wavs) == {}
 
 
 def test_no_earlier_transcript_beside_a_fresh_recording(tmp_path: Path) -> None:
@@ -219,8 +244,11 @@ class _GeneratorModel:
 class _BrokenModel:
     """Stand-in for a model that fails to decode."""
 
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
     def transcribe(self, audio: str, **kwargs: object) -> None:  # noqa: ARG002
-        raise RuntimeError("decoder exploded")
+        raise self._error
 
 
 def test_transcribe_materializes_segments_and_strips_whitespace(tmp_path: Path) -> None:
@@ -257,12 +285,22 @@ def test_transcribe_passes_the_fixed_decoding_settings(tmp_path: Path) -> None:
     assert call["condition_on_previous_text"] is False
 
 
-def test_transcribe_wraps_decoder_failures(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("decoder exploded"),
+        OSError("decoder exploded"),
+        # How faster-whisper rejects `language = "kr"`, and the base of PyAV's
+        # InvalidDataError for audio it cannot decode.
+        ValueError("decoder exploded"),
+    ],
+)
+def test_transcribe_wraps_decoder_failures(tmp_path: Path, error: Exception) -> None:
     wav = tmp_path / "audio.wav"
     wav.touch()
 
     with pytest.raises(TranscriptionError, match="decoder exploded"):
-        transcribe(_BrokenModel(), wav, language="ko", beam_size=5)
+        transcribe(_BrokenModel(error), wav, language="ko", beam_size=5)
 
 
 def test_empty_recording_yields_no_segments(tmp_path: Path) -> None:
