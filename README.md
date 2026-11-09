@@ -22,7 +22,8 @@
   <a href="#what-you-get">What you get</a> ·
   <a href="#faster-with-an-nvidia-card">GPU</a> ·
   <a href="#troubleshooting">Troubleshooting</a> ·
-  <a href="#settings">Settings</a>
+  <a href="#settings">Settings</a> ·
+  <a href="#contributing">Contributing</a>
 </p>
 
 <p align="center">
@@ -445,6 +446,8 @@ could silently record the microphone.
 `CLAUDE.md` holds the settled decisions and the non-obvious facts behind
 them, such as why `soundcard` rather than `sounddevice`, why two channels are
 captured when one is written, and why tkinter could not be the GUI.
+[`docs/decisions.md`](./docs/decisions.md) gives each decision its date and
+reason, and [`docs/bugs.md`](./docs/bugs.md) lists open and fixed bugs.
 
 | step | contents | state |
 |---|---|---|
@@ -456,8 +459,29 @@ captured when one is written, and why tkinter could not be the GUI.
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done |
 | A | `keep_awake.py`: no lock or sleep while recording or transcribing | done |
 | R | window refresh: rounded surfaces, state chip, signal colours | done |
+| K | language choice: Korean or English, never automatic | done |
 
 </details>
+
+## Contributing
+
+Bug reports and suggestions are welcome. For a bug, open an
+[issue](https://github.com/snowing152/lecture-scribe/issues/new/choose) and
+paste the output of `scribe doctor`.
+
+Before writing code, read [CONTRIBUTING.md](./.github/CONTRIBUTING.md). It
+lists what will not be merged (anything that sends audio or text off the
+computer, automatic language detection) and what is open to proposals: a
+real-time mode, speaker separation, translation and summaries, as long as
+they run locally. None of those exists yet.
+
+- Found a security problem? Report it privately, as described in
+  [SECURITY.md](./.github/SECURITY.md).
+- Something keeps you from using the tool? See
+  [ACCESSIBILITY.md](./.github/ACCESSIBILITY.md) for what works, the known
+  gaps, and how to report a barrier.
+- Everyone taking part follows the
+  [Code of Conduct](./.github/CODE_OF_CONDUCT.md).
 
 ## License
 
