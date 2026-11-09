@@ -214,8 +214,15 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 
 ## Recognition settings that must not drift
 
-- `language="ko"` fixed. Auto detection confuses Korean with Japanese on the
-  first seconds and then the whole file goes wrong.
+- **The language is always named, never auto detected.** `ko` by default;
+  the window offers Korean and English, `scribe text --language` takes any
+  code, and neither writes the choice back to `config.toml`. Auto detection
+  confuses Korean with Japanese on the first seconds and then the whole file
+  goes wrong: faster-whisper 1.2.1 guesses once, from one thirty second
+  window (`language_detection_segments=1`), for the whole file. Measured on
+  the k-means lecture: `en` on Korean speech gives a loose English
+  translation ("It means that there is a K-means."), while `ko` keeps
+  English terms readable, as `K-means` or as `클러스터링`.
 - `vad_filter=True`, `vad_parameters={"min_silence_duration_ms": 500}`.
 - `condition_on_previous_text=False`. On a 90 minute file one error otherwise
   drags chained repetitions to the end.
@@ -272,3 +279,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |
+| K | language choice: Korean / English in the window, `scribe text --language` | built; waiting for a hand check |

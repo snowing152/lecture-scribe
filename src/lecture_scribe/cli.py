@@ -81,7 +81,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "text":
         wavs: list[Path] = args.wav
         model: str | None = args.model
-        return _text(merge_cli(config, model=model), wavs)
+        language: str | None = args.language
+        return _text(merge_cli(config, model=model, language=language), wavs)
     if command == "gui":
         return _gui(config)
     if command == "launcher":
@@ -108,6 +109,11 @@ def _build_parser() -> argparse.ArgumentParser:
     text = commands.add_parser("text", help="transcribe one or more recordings")
     text.add_argument("wav", nargs="+", type=Path, help="WAV files to transcribe")
     text.add_argument("--model", help="override the configured ASR model")
+    text.add_argument(
+        "--language",
+        help="spoken language as a Whisper code, such as ko or en; "
+        "overrides asr.language",
+    )
 
     commands.add_parser("gui", help="open the desktop window")
 
@@ -365,7 +371,12 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
     Returns:
         The process exit code: 0 if every file transcribed, 1 if any failed.
     """
-    print(f"loading {config.asr.model} ({compute_type(config.asr.gpu)}) ...")
+    # The language is named here because it is the one setting a single run
+    # can now change, and the wrong one costs a whole recognition.
+    print(
+        f"loading {config.asr.model} ({compute_type(config.asr.gpu)}), "
+        f"language {config.asr.language} ..."
+    )
     try:
         model = load_model(config.asr.model, gpu=config.asr.gpu)
     except TranscriptionError as error:

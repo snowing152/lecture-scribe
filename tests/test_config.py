@@ -72,6 +72,13 @@ def test_cli_overrides_the_file() -> None:
     assert config.audio.device == "auto"
 
 
+def test_cli_language_overrides_the_file() -> None:
+    config = Config()
+
+    assert merge_cli(config, language="en").asr.language == "en"
+    assert merge_cli(config).asr.language == "ko"
+
+
 def test_unknown_key_is_rejected_with_a_hint(tmp_path: Path) -> None:
     path = _write(tmp_path, "[audio]\nsample_rte = 16000\n")
 

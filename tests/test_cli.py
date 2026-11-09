@@ -36,6 +36,29 @@ def test_a_file_that_is_not_a_recording_fails_before_the_model_loads(
     assert "cannot read" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("flags", "language"), [([], "ko"), (["--language", "en"], "en")]
+)
+def test_the_language_flag_reaches_recognition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: list[str],
+    language: str,
+) -> None:
+    # Away from the checkout's own config.toml, so the default is the default.
+    monkeypatch.chdir(tmp_path)
+    used: list[Config] = []
+
+    def collect(config: Config, _wavs: list[Path]) -> int:
+        used.append(config)
+        return 0
+
+    monkeypatch.setattr(cli, "_text", collect)
+
+    assert cli.main(["text", *flags, "lecture.wav"]) == 0
+    assert used[0].asr.language == language
+
+
 def test_recordings_that_would_share_a_transcript_are_refused(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

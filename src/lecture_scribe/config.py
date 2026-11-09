@@ -46,7 +46,10 @@ class AsrConfig:
     Attributes:
         model: faster-whisper model name or a path to a local model directory.
         gpu: Whether to run the model on CUDA instead of the CPU.
-        language: Spoken language, fixed rather than auto detected.
+        language: Spoken language as a Whisper code, such as ``ko`` or
+            ``en``. Always named, never auto detected: Whisper guesses once
+            from the opening thirty seconds and applies the guess to the
+            whole file, and it has taken Korean for Japanese there.
         beam_size: Beam search width passed to the decoder.
     """
 
@@ -135,13 +138,19 @@ def merge_cli(
     *,
     device: str | None = None,
     model: str | None = None,
+    language: str | None = None,
 ) -> Config:
     """Apply command line overrides on top of the file settings.
+
+    The window applies its language choice through here as well, so both
+    front ends override the file the same way.
 
     Args:
         config: Settings as loaded from ``config.toml``.
         device: Value of ``--device``, or ``None`` when the flag was absent.
         model: Value of ``--model``, or ``None`` when the flag was absent.
+        language: Value of ``--language``, or ``None`` when the flag was
+            absent.
 
     Returns:
         A new configuration; the input is left untouched.
@@ -151,6 +160,8 @@ def merge_cli(
         result = replace(result, audio=replace(result.audio, device=device))
     if model is not None:
         result = replace(result, asr=replace(result.asr, model=model))
+    if language is not None:
+        result = replace(result, asr=replace(result.asr, language=language))
     return result
 
 
