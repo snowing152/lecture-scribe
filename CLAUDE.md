@@ -279,4 +279,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | L | `launcher.py`, `scribe launcher`: menu entry on both platforms | done — verified on Linux and on Windows 11 |
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |
-| K | language choice: Korean / English in the window, `scribe text --language` | built; waiting for a hand check |
+| K | language choice: Korean / English in the window, `scribe text --language` | done — checked by hand on Linux; not yet looked at on Windows |
