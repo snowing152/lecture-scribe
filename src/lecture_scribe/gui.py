@@ -326,6 +326,17 @@ class _TranscribeWorker(QThread):
             self.failed.emit(str(error))
             return
 
+        # A stop that arrived while the model loaded -- the window closed
+        # during a first download, say -- would otherwise reach the decoder
+        # only after it had read and scanned the whole recording, half a
+        # minute more of a process with no window left to show for it.
+        if self._stop.is_set():
+            self.stopped.emit(
+                "recognition was stopped before it began; the recording itself "
+                "is untouched and can be transcribed again"
+            )
+            return
+
         # The decoder scans the whole file for speech before the first
         # segment exists, which on a long lecture is a good twenty seconds
         # with nothing moving on screen.
@@ -380,6 +391,14 @@ class _Combo(QComboBox):
 
     _WIDTH = 9.0
     _HEIGHT = 5.0
+
+    opening = Signal()
+    """Sent just before the list drops down, while it can still be refilled."""
+
+    def showPopup(self) -> None:  # noqa: N802 (Qt override)
+        """Let the window bring the list up to date, then drop it down."""
+        self.opening.emit()
+        super().showPopup()
 
     def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
         """Draw the box, an elided label, then the arrow on top of it."""
@@ -679,6 +698,9 @@ class _Window(QWidget):
         super().__init__()
         self._config = config
         self._devices: list[LoopbackDevice] = []
+        # The device chosen by hand from the list, kept across refills of it.
+        # None while the configured choice applies, as it does at startup.
+        self._picked: LoopbackDevice | None = None
         self._recorder: _RecordWorker | None = None
         self._transcriber: _TranscribeWorker | None = None
         # Recording and recognition never run at once, so one request covers both.
@@ -732,6 +754,10 @@ class _Window(QWidget):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self._device_box.setMinimumContentsLength(12)
+        # `activated` rather than `currentIndexChanged`: only a choice made by
+        # hand counts, not the list being refilled underneath.
+        self._device_box.activated.connect(self._on_device_picked)
+        self._device_box.opening.connect(self._on_device_list_opening)
         form.addWidget(_caption("Course"), 0, 0)
         form.addWidget(_caption("Device"), 0, 1)
         form.addWidget(self._course, 1, 0)
@@ -807,25 +833,68 @@ class _Window(QWidget):
         open_file = QShortcut(QKeySequence("Ctrl+O"), self)
         open_file.activated.connect(self._open_recording)
 
-    def _load_devices(self) -> None:
-        """Fill the device list and preselect the configured one."""
+    def _load_devices(self) -> LoopbackDevice | None:
+        """Read the output devices afresh and select the one to record from.
+
+        Read again before every recording rather than once at startup:
+        plugging in headphones renames or replaces the system's output, and
+        a list from when the window opened would record the old one. A
+        device picked by hand stays picked for as long as it exists;
+        otherwise the configured choice applies, ``auto`` following the
+        system default to wherever it has moved.
+
+        Returns:
+            The selected device, or ``None`` when there is none to record
+            from, with the reason already on the status line. A device picked
+            by hand that has since gone also gives ``None``, so that a
+            recording never starts on a device other than the one shown when
+            record was pressed.
+        """
+        self._device_box.clear()
         try:
             devices = list_loopback_devices()
         except AudioDeviceError as error:
+            self._devices = []
             self._say(str(error), problem=True)
-            return
+            return None
 
         self._devices = devices
         for device in devices:
             suffix = "  (system default)" if device.is_default else ""
             self._device_box.addItem(f"{device.name}{suffix}")
 
+        picked = self._picked
+        if picked is not None:
+            for index, device in enumerate(devices):
+                if device.id == picked.id:
+                    self._device_box.setCurrentIndex(index)
+                    return device
+            self._picked = None
+
         try:
             selected = resolve_device(devices, self._config.audio.device)
         except AudioDeviceError as error:
             self._say(str(error), problem=True)
-            return
+            return None
         self._device_box.setCurrentIndex(devices.index(selected))
+        if picked is not None:
+            self._say(
+                f"'{picked.name}' is gone, so the list is back on "
+                f"'{selected.name}'; press record again to use it",
+                problem=True,
+            )
+            return None
+        return selected
+
+    def _on_device_picked(self, index: int) -> None:
+        """Remember a device chosen by hand, so a refill of the list keeps it."""
+        if 0 <= index < len(self._devices):
+            self._picked = self._devices[index]
+
+    def _on_device_list_opening(self) -> None:
+        """Bring the list up to date before it drops down."""
+        self._load_devices()
+        self._refresh()
 
     def _toggle_record(self) -> None:
         """Start recording, or stop the recording that is running."""
@@ -841,7 +910,10 @@ class _Window(QWidget):
         """Create the lecture folder and hand the capture to a worker."""
         if self._busy():
             return
-        device = self._devices[self._device_box.currentIndex()]
+        device = self._load_devices()
+        if device is None:
+            self._refresh()
+            return
         try:
             folder = lecture_dir(
                 self._config.output.dir, self._course.text().strip(), datetime.now()
@@ -923,9 +995,16 @@ class _Window(QWidget):
         self._refresh()
 
     def _on_record_failed(self, message: str) -> None:
-        """Report a recording that could not start or could not continue."""
+        """Report a recording that could not start at all.
+
+        A recording that fails part way returns rather than raises, so this
+        only ever follows one that captured nothing. Its file holds no audio,
+        so it is no longer offered for transcription.
+        """
         self._recording = False
+        self._wav = None
         self._meter.reset()
+        self._clock.setText(format_duration(0.0))
         self._say(message, problem=True)
         self._refresh()
 
@@ -1222,6 +1301,21 @@ class _Window(QWidget):
         has really finished. Waiting for that matters: a QThread destroyed
         while it is still running takes the whole process down with it.
         """
+        if self._recording:
+            # Asked with No as the default: the rest of a lecture cannot be
+            # recorded again, so a stray Enter must not be what ends it.
+            answer = QMessageBox.question(
+                self,
+                "lecture scribe",
+                "A lecture is being recorded.\n"
+                "Closing stops the recording; everything captured so far is "
+                "kept on disk, but the rest of the lecture is not recorded. "
+                "Close anyway?",
+                defaultButton=QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         if self._transcribing:
             answer = QMessageBox.question(
                 self,

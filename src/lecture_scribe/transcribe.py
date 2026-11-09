@@ -9,7 +9,7 @@ import ctypes
 import os
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -339,8 +339,9 @@ def transcribe(
         not reach the end.
 
     Raises:
-        TranscriptionError: The file could not be decoded, or GPU decoding
-            was requested but the CUDA runtime libraries are not installed.
+        TranscriptionError: The file could not be decoded, the language code
+            is not one Whisper knows, or GPU decoding was requested but the
+            CUDA runtime libraries are not installed.
     """
     start = time.monotonic()
     segments: list[Segment] = []
@@ -386,7 +387,11 @@ def transcribe(
                     "is untouched and can be transcribed again"
                 )
                 break
-    except (OSError, RuntimeError) as error:
+    # ValueError covers two failures that otherwise kill a front end with no
+    # reason shown: faster-whisper rejects an unknown language code only after
+    # it has read and scanned the whole file, and PyAV reports audio it cannot
+    # decode as InvalidDataError, a ValueError.
+    except (OSError, RuntimeError, ValueError) as error:
         raise TranscriptionError(f"cannot transcribe {wav}: {error}") from error
 
     return Transcription(
@@ -411,6 +416,27 @@ def transcript_path(wav: Path) -> Path:
         ``<folder>/<folder name>.txt``.
     """
     return wav.parent / f"{wav.parent.name}.txt"
+
+
+def shared_transcripts(wavs: Sequence[Path]) -> dict[Path, list[Path]]:
+    """Find recordings that would write their transcripts to one file.
+
+    A transcript is named after its folder, so two recordings in one folder
+    -- ``scribe text ~/Downloads/*.wav`` -- would each be recognised in full
+    and each written over the one before, leaving only the last.
+
+    Args:
+        wavs: Recordings about to be transcribed in one batch.
+
+    Returns:
+        Each transcript more than one of them would write, with those
+        recordings in the order given. Empty when every one has its own.
+    """
+    by_target: dict[Path, list[Path]] = {}
+    for wav in wavs:
+        # Resolved, so that `a/x.wav` and `./a/../a/y.wav` count as one folder.
+        by_target.setdefault(transcript_path(wav.resolve()), []).append(wav)
+    return {target: group for target, group in by_target.items() if len(group) > 1}
 
 
 def write_transcript(path: Path, text: str) -> None:
