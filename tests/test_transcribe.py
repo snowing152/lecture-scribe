@@ -13,6 +13,7 @@ from lecture_scribe.transcribe import (
     Decoding,
     Transcription,
     TranscriptionError,
+    check_language,
     compute_type,
     earlier_transcript,
     gpu_status,
@@ -23,6 +24,28 @@ from lecture_scribe.transcribe import (
     transcript_path,
     write_transcript,
 )
+
+
+@dataclass
+class _Languages:
+    """Stands in for a loaded model, as far as its languages go."""
+
+    supported_languages: list[str]
+
+
+def test_a_language_the_model_knows_passes() -> None:
+    check_language(_Languages(["en", "ja", "ko"]), "ko")
+
+
+def test_an_unknown_language_code_is_refused_with_the_likely_ones() -> None:
+    with pytest.raises(TranscriptionError, match="Korean is ko"):
+        check_language(_Languages(["en", "ja", "ko"]), "kr")
+
+
+def test_an_english_only_model_refuses_korean() -> None:
+    # faster-whisper itself would switch to English and only log it.
+    with pytest.raises(TranscriptionError, match="English only"):
+        check_language(_Languages(["en"]), "ko")
 
 
 def test_compute_type_matches_the_device() -> None:

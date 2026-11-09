@@ -40,6 +40,7 @@ from lecture_scribe.launcher import remove as remove_launcher
 from lecture_scribe.transcribe import (
     Decoding,
     TranscriptionError,
+    check_language,
     compute_type,
     gpu_status,
     load_model,
@@ -281,6 +282,11 @@ def _rec(config: Config, course: str) -> int:
     print(f"stopped after {format_duration(recording.duration)}")
     _row("size", f"{target.stat().st_size / 1_000_000:.1f} MB")
     _row("level", f"mean {dbfs(recording.mean_rms)}, peak {dbfs(recording.peak)}")
+    if recording.duration == 0.0:
+        # Ctrl+C landed after the check above but before the first block.
+        # Not "silent from end to end": there was nothing to hear.
+        print("\nstopped before any audio arrived; the file holds no recording.")
+        return 130
     if recording.interrupted is not None:
         print(f"\n{recording.interrupted}.", file=sys.stderr)
         return 1
@@ -321,7 +327,13 @@ def _text(config: Config, wavs: list[Path]) -> int:
     """
     failures = 0
     readable = []
+    # A file named twice, by overlapping globs say, is one recording rather
+    # than two that clash, so it is transcribed once under its first spelling.
+    seen: set[Path] = set()
     for wav in wavs:
+        if wav.resolve() in seen:
+            continue
+        seen.add(wav.resolve())
         if not wav.is_file():
             print(f"error: {wav} does not exist", file=sys.stderr)
             failures += 1
@@ -387,6 +399,12 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
         # press should end outright: nothing has been read or written yet.
         print("\ninterrupted while loading the model.", file=sys.stderr)
         return 130
+    # Once for the batch: a wrong code fails every file the same way.
+    try:
+        check_language(model, config.asr.language)
+    except TranscriptionError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
 
     status = _StatusLine()
     # Installed only now: a Ctrl+C during a model download of several

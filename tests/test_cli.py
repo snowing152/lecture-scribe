@@ -7,8 +7,14 @@ import pytest
 import soundfile as sf
 
 from lecture_scribe import cli
-from lecture_scribe.config import Config
+from lecture_scribe.config import AsrConfig, Config
 from lecture_scribe.transcribe import Segment, Transcription
+
+
+class _Model:
+    """Stands in for a loaded multilingual model."""
+
+    supported_languages = ("en", "ja", "ko")
 
 
 def _lecture(root: Path, name: str) -> Path:
@@ -87,6 +93,49 @@ def test_recordings_that_would_share_a_transcript_are_refused(
     assert "Downloads.txt" in capsys.readouterr().err
 
 
+def test_a_file_named_twice_is_transcribed_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    own = _lecture(tmp_path, "os")
+    sf.write(own, np.zeros(1600, dtype=np.float32), 16000)
+    # The same file reached by a second, longer path.
+    again = own.parent / ".." / "os" / own.name
+    handed: list[list[Path]] = []
+
+    def collect(_config: Config, wavs: list[Path], failures: int) -> int:
+        handed.append(wavs)
+        return 1 if failures else 0
+
+    monkeypatch.setattr(cli, "_transcribe_all", collect)
+
+    assert cli._text(Config(), [own, again]) == 0
+    assert handed == [[own]]
+    assert capsys.readouterr().err == ""
+
+
+def test_an_unknown_language_fails_once_before_any_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def never(*_args: object, **_kwargs: object) -> Transcription:
+        raise AssertionError("no file should be read with a language that fails")
+
+    monkeypatch.setattr(cli, "load_model", lambda *_args, **_kwargs: _Model())
+    monkeypatch.setattr(cli, "transcribe", never)
+    monkeypatch.setattr(cli, "_install_stop_handler", lambda *_args, **_kwargs: None)
+    config = Config(asr=AsrConfig(language="kr"))
+
+    code = cli._transcribe_all(
+        config, [_lecture(tmp_path, "os"), _lecture(tmp_path, "db")], failures=0
+    )
+
+    assert code == 1
+    assert capsys.readouterr().err.count("'kr' is not a language code") == 1
+
+
 def test_a_transcript_that_cannot_be_written_stops_the_batch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -107,7 +156,7 @@ def test_a_transcript_that_cannot_be_written_stops_the_batch(
         recognised.append(wav)
         return result
 
-    monkeypatch.setattr(cli, "load_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "load_model", lambda *_args, **_kwargs: _Model())
     monkeypatch.setattr(cli, "transcribe", recognise)
     # The real one would take Ctrl+C away from pytest for the rest of the run.
     monkeypatch.setattr(cli, "_install_stop_handler", lambda *_args, **_kwargs: None)
