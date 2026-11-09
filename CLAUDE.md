@@ -17,10 +17,14 @@ one core.
 
 ## Settled decisions
 
-- **No real time.** Record the whole WAV first, recognise afterwards. Batch
-  decoding is more accurate because the model sees whole sentences.
-- **No speaker diarization, no translation, no summarisation, no cloud ASR.**
-  One voice, one language, one machine.
+- **Record first, recognise afterwards, by default.** Batch decoding is more
+  accurate because the model sees whole sentences. Since 2026-11-09 a
+  real-time mode is no longer ruled out, but only beside the batch path,
+  never instead of it: recording must still work without the model.
+- **Nothing leaves the machine: no cloud ASR, no upload, no telemetry.**
+  Speaker diarization, translation and summarisation were ruled out until
+  2026-11-09 and are now open, as long as they run locally. None is built
+  yet, and each would need a dependency agreed first.
 - **The window is a second front end, never the only one.** `cli.py` and
   `gui.py` are peers: everything the window does stays reachable from the
   command line, and neither holds logic the other needs.

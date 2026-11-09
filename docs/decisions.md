@@ -10,7 +10,7 @@ rejected.
 
 ---
 
-### D-1 · 2026-09-10 · active: Record first, recognise afterwards
+### D-1 · 2026-09-10 · active, relaxed by D-23: Record first, recognise afterwards
 
 No real-time transcription. The whole WAV is recorded, then decoded in a
 batch.
@@ -24,7 +24,7 @@ Recording needs neither the model nor `faster-whisper`. Transcribing can
 happen later or on another machine.
 **Why:** record on a laptop without a GPU or the model, decode elsewhere.
 
-### D-3 · 2026-09-10 · active: Local only, one voice, one language
+### D-3 · 2026-09-10 · local only still active; the rest reversed by D-23: Local only, one voice, one language
 
 No diarization, translation, summarisation or cloud ASR.
 **Why:** one lecturer, one machine. Every extra stage is a place to be wrong.
@@ -159,3 +159,14 @@ readable.
 No plugins, factories or single-implementation base classes. No blanket
 `try/except`: catch named exceptions and say what to do next. No new
 dependencies without asking.
+
+### D-23 · 2026-11-09 · active: Real time, speakers, translation and summaries are open, if local
+
+Opened at the user's request while writing `CONTRIBUTING.md`. A real-time
+mode may be added beside the batch path (D-1 stays the default, D-2 still
+holds). Speaker diarization, translation and summarisation may be added
+(reverses that part of D-3). None of them is built.
+**Why:** the user saw no reason to refuse them, as long as nothing leaves the
+machine.
+**Still rejected:** cloud ASR, upload, telemetry; real time replacing batch;
+any of these as a new dependency without asking first (D-22).
