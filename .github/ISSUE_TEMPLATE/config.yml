@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/snowing152/lecture-scribe/security/advisories/new
+    about: Report it privately, not as a public issue.
+  - name: How to use it
+    url: https://github.com/snowing152/lecture-scribe#troubleshooting
+    about: Silent recording, ignored settings, the screen still locking -- answered in the README.
