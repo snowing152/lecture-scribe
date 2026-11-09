@@ -6,7 +6,7 @@ silence_rms = 0.001      # blocks quieter than this count as silence
 [asr]
 model = "large-v3"
 gpu = false
-language = "ko"
+language = "ko"          # "en" for English; the window starts on this one
 beam_size = 5
 
 [output]

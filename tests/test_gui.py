@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from lecture_scribe import gui
 from lecture_scribe.audio_capture import LoopbackDevice
-from lecture_scribe.config import Config, OutputConfig
+from lecture_scribe.config import AsrConfig, Config, OutputConfig
 
 _SPEAKERS = LoopbackDevice(name="Speakers", id="alsa.speakers", is_default=True)
 _HDMI = LoopbackDevice(name="HDMI", id="alsa.hdmi", is_default=False)
@@ -142,6 +142,62 @@ def test_closing_during_a_recording_asks_and_defaults_to_no(
 
     assert asked == [QMessageBox.StandardButton.No]
     assert not event.isAccepted()
+
+
+def test_the_language_starts_on_the_configured_one(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+
+    assert window._language_box.currentText() == "Korean"
+    assert window._recognition_config().asr.language == "ko"
+
+
+def test_the_chosen_language_is_the_one_recognised(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+
+    window._language_box.setCurrentIndex(window._language_box.findText("English"))
+
+    assert window._recognition_config().asr.language == "en"
+    # Chosen for this run only: the configuration itself is left alone.
+    assert window._config.asr.language == "ko"
+
+
+def test_a_configured_language_outside_the_list_is_kept(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    config = Config(
+        asr=AsrConfig(language="ja"), output=OutputConfig(dir=tmp_path / "lectures")
+    )
+
+    window = gui._Window(config)
+
+    assert window._language_box.count() == 3
+    assert window._recognition_config().asr.language == "ja"
+
+
+def test_the_language_is_locked_while_working(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    window._recording = True
+    window._recorder = gui._RecordWorker(
+        _SPEAKERS, tmp_path / "x.wav", sample_rate=16000, silence_rms=0.0
+    )
+
+    window._refresh()
+
+    assert not window._language_box.isEnabled()
 
 
 def test_a_stop_while_the_model_loads_skips_recognition(

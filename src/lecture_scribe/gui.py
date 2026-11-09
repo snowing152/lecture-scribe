@@ -68,7 +68,7 @@ from lecture_scribe.audio_capture import (
     recording_path,
     resolve_device,
 )
-from lecture_scribe.config import Config, ConfigError, load_config
+from lecture_scribe.config import Config, ConfigError, load_config, merge_cli
 from lecture_scribe.format_text import (
     Passage,
     format_duration,
@@ -89,6 +89,15 @@ from lecture_scribe.transcribe import (
     transcript_path,
     write_transcript,
 )
+
+_LANGUAGES = (("ko", "Korean"), ("en", "English"))
+"""What the language list offers, as Whisper code and name.
+
+No automatic entry: Whisper guesses once from the opening thirty seconds and
+holds the whole file to that guess. Measured here, it took Korean for
+Japanese, and a Korean lecture recognised as English comes out as a loose
+English translation. Any other code still works from ``config.toml``.
+"""
 
 _GLYPH = 10
 """Side of a button's painted icon, in logical pixels."""
@@ -319,7 +328,10 @@ class _TranscribeWorker(QThread):
     def run(self) -> None:
         """Recognise the recording and write its transcript beside it."""
         asr = self._config.asr
-        self.staged.emit(f"loading {asr.model} ({compute_type(asr.gpu)}) ...")
+        self.staged.emit(
+            f"loading {asr.model} ({compute_type(asr.gpu)}), "
+            f"language {asr.language} ..."
+        )
         try:
             model = load_model(asr.model, gpu=asr.gpu)
         except TranscriptionError as error:
@@ -714,6 +726,7 @@ class _Window(QWidget):
 
         self._build()
         self._load_devices()
+        self._load_languages()
         self._refresh()
 
     def _build(self) -> None:
@@ -742,9 +755,11 @@ class _Window(QWidget):
         form = QGridLayout()
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(5)
-        # The device name is the longer of the two by far.
+        # The device name is the longest by far; the language is one word and
+        # keeps the width that word needs.
         form.setColumnStretch(0, 1)
         form.setColumnStretch(1, 2)
+        form.setColumnStretch(2, 0)
         self._course = QLineEdit()
         self._course.setPlaceholderText("used for the folder")
         self._course.textChanged.connect(self._refresh)
@@ -758,10 +773,16 @@ class _Window(QWidget):
         # hand counts, not the list being refilled underneath.
         self._device_box.activated.connect(self._on_device_picked)
         self._device_box.opening.connect(self._on_device_list_opening)
+        self._language_box = _Combo()
+        self._language_box.setToolTip(
+            "the language the lecture is spoken in; used when transcribing"
+        )
         form.addWidget(_caption("Course"), 0, 0)
         form.addWidget(_caption("Device"), 0, 1)
+        form.addWidget(_caption("Language"), 0, 2)
         form.addWidget(self._course, 1, 0)
         form.addWidget(self._device_box, 1, 1)
+        form.addWidget(self._language_box, 1, 2)
         layout.addLayout(form)
         layout.addSpacing(34)
 
@@ -885,6 +906,31 @@ class _Window(QWidget):
             )
             return None
         return selected
+
+    def _load_languages(self) -> None:
+        """Fill the language list and select the configured language.
+
+        A code from ``config.toml`` that the list does not offer is added
+        under its own name rather than dropped, so the window never quietly
+        transcribes in a language other than the one configured.
+        """
+        configured = self._config.asr.language
+        for code, name in _LANGUAGES:
+            self._language_box.addItem(name, code)
+        if all(code != configured for code, _name in _LANGUAGES):
+            self._language_box.addItem(configured, configured)
+        self._language_box.setCurrentIndex(self._language_box.findData(configured))
+
+    def _recognition_config(self) -> Config:
+        """The configuration a transcription runs with, language as chosen.
+
+        Returns:
+            The configuration from ``config.toml``, with the language field's
+            choice applied the way ``--language`` applies it on the command
+            line. Nothing is written back: the next start begins from the
+            file again.
+        """
+        return merge_cli(self._config, language=str(self._language_box.currentData()))
 
     def _on_device_picked(self, index: int) -> None:
         """Remember a device chosen by hand, so a refill of the list keeps it."""
@@ -1129,7 +1175,9 @@ class _Window(QWidget):
         if self._wav is None or self._busy():
             return
         self._transcript.clear()
-        worker = _TranscribeWorker(self._config, self._wav, list(self._marks))
+        worker = _TranscribeWorker(
+            self._recognition_config(), self._wav, list(self._marks)
+        )
         worker.staged.connect(self._say)
         worker.progressed.connect(self._on_decoding)
         worker.transcribed.connect(self._on_transcribed)
@@ -1265,6 +1313,7 @@ class _Window(QWidget):
         self._text.setEnabled(self._transcribing or (idle and self._wav is not None))
         self._course.setEnabled(idle)
         self._device_box.setEnabled(idle)
+        self._language_box.setEnabled(idle)
         if self._recording:
             self._chip.show_state("recording", live=True)
         elif self._transcribing:

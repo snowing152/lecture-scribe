@@ -166,7 +166,9 @@ and open a new window.
    finding again, such as "this will be on the exam". Marked paragraphs show
    in amber.
 5. Press **stop** when the lecture ends.
-6. Press **transcribe**. The meter turns into a progress bar and the text
+6. Check **Language**: Korean, or English for a lecture given in English.
+   It only matters for the next step, so you can change it after recording.
+7. Press **transcribe**. The meter turns into a progress bar and the text
    appears in the pane as it is recognised, so you can start reading straight
    away.
 
@@ -187,6 +189,15 @@ Good to know:
 - **Stopping a transcription halfway writes nothing**, because half a lecture
   would look like a whole one. Closing the window during a transcription
   asks you first.
+- **There is no automatic language.** The model would guess once from the
+  first half minute and keep that guess for the whole lecture, and a wrong
+  guess spoils all of it. A Korean lecture transcribed as English comes out
+  as a rough English translation, so pick the language the lecturer speaks.
+  English terms inside a Korean lecture are fine with Korean: they come out
+  as `K-means` or as `클러스터링`.
+- **The language resets** to the one in `config.toml` (Korean unless you
+  changed it) each time the window opens. If a whole course is in English,
+  set `language = "en"` there.
 - **Copying**: select all, then copy, and you get the text exactly as it is in
   the `.txt` file.
 - Colours mean something: **red** means recording, **amber** means a mark.
@@ -327,7 +338,7 @@ work as they are.
 | `audio.silence_rms` | `0.001` | level below which sound counts as silence |
 | `asr.model` | `"large-v3"` | which faster-whisper model to use |
 | `asr.gpu` | `false` | use an NVIDIA card; see [above](#faster-with-an-nvidia-card) |
-| `asr.language` | `"ko"` | spoken language, never auto-detected |
+| `asr.language` | `"ko"` | spoken language the window starts on, such as `"ko"` or `"en"`; never auto-detected |
 | `asr.beam_size` | `5` | how many alternatives the model weighs |
 | `output.dir` | `"~/lectures"` | where lecture folders go |
 | `output.paragraph_gap` | `1.2` | seconds of pause that start a new paragraph |
@@ -383,6 +394,7 @@ quickest way to catch up on a week of lectures:
 ```bash
 scribe text ~/lectures/*/*.wav
 scribe text --model large-v3 lecture.wav    # another model, without editing config.toml
+scribe text --language en lecture.wav       # a lecture given in English
 ```
 
 <kbd>Ctrl</kbd>+<kbd>C</kbd> during `text` stops at the end of the current
