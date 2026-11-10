@@ -38,7 +38,7 @@ Newest first. Commit hashes are on `main`.
   failure after the WAV exists leaves the header-only file and its folder.
 - **B-9**: `notify-send` on the PATH that would not start raised `OSError`
   out of `keep_awake`, and the recording never began. It is now ignored like
-  a timeout.
+  a timeout. Commit: `5a5ff29`.
 
 ### 2026-11-10, "Load a cached model without touching the network" (B-7)
 
