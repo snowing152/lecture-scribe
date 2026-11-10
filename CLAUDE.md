@@ -144,6 +144,11 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   without which Qt breaks `00:47` one character per line.
 - The pane copies the file's own text on select all, not what it shows: a
   table copies one cell per line. `_Transcript.createMimeDataFromSelection`.
+- **`textwrap` counts characters, and a Korean syllable is two columns.**
+  Transcripts wrapped at 80 characters ran to 107-137 columns on screen, so
+  `format_text._wrap` wraps by `east_asian_width` instead. Cost: about one
+  and a half times the lines (280 -> 434 on a real 컴넷 transcript), so a
+  phrase of several words meets a line break more often under `grep`.
 - Qt stylesheets have no `letter-spacing`; it only exists as
   `QFont.setLetterSpacing`, hence `_track()`.
 - Frozen dataclasses cross `QThread` signal boundaries intact and arrive on

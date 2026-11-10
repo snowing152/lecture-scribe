@@ -1,6 +1,8 @@
 """Tests for turning segments into the readable transcript."""
 
+import textwrap
 from collections.abc import Sequence
+from unicodedata import east_asian_width
 
 from lecture_scribe.format_text import (
     Passage,
@@ -316,3 +318,60 @@ def test_a_duration_always_shows_the_hour() -> None:
     assert format_duration(0.0) == "0:00:00"
     assert format_duration(754.9) == "0:12:34"
     assert format_duration(4865.0) == "1:21:05"
+
+
+def _width(line: str) -> int:
+    return sum(2 if east_asian_width(char) in ("W", "F") else 1 for char in line)
+
+
+def _one_paragraph(text: str) -> str:
+    return _render([Segment(0.0, 4.0, text, -0.1)])
+
+
+def test_korean_lines_are_at_most_80_columns_wide() -> None:
+    text = " ".join(["프로토콜의 혼잡 제어는 슬라이딩 윈도우로 동작합니다"] * 8)
+
+    lines = _one_paragraph(text).splitlines()[2:]
+
+    assert len(lines) > 1
+    assert all(_width(line) <= 80 for line in lines)
+
+
+def test_korean_mixed_with_english_terms_stays_within_80_columns() -> None:
+    text = " ".join(["K-means 클러스터링은 centroid 를 반복해서 갱신합니다"] * 6)
+
+    lines = _one_paragraph(text).splitlines()[2:]
+
+    assert all(_width(line) <= 80 for line in lines)
+
+
+def test_english_wraps_exactly_as_textwrap_did() -> None:
+    text = " ".join(["the quick brown fox jumps over the lazy dog"] * 12)
+    prefix = "[00:00] "
+
+    expected = textwrap.fill(
+        text,
+        width=80,
+        initial_indent=prefix,
+        subsequent_indent=" " * len(prefix),
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+    assert _one_paragraph(text).splitlines()[2:] == expected.splitlines()
+
+
+def test_a_word_wider_than_a_line_is_kept_whole() -> None:
+    word = "가" * 60
+
+    lines = _one_paragraph(f"짧은 {word} 끝").splitlines()[2:]
+
+    assert word in lines[1]
+
+
+def test_wrapped_korean_reads_back_as_the_same_text() -> None:
+    text = " ".join(["프로토콜의 혼잡 제어는 슬라이딩 윈도우로 동작합니다"] * 8)
+
+    _header, passages = read_transcript(_one_paragraph(text))
+
+    assert passages[0].text == text

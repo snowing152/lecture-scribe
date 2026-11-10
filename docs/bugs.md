@@ -6,7 +6,7 @@ date and commit. Do not delete it.
 
 ## Open
 
-None. The next one found gets id B-10.
+None. The next one found gets id B-11.
 
 ## Known limitations
 
@@ -28,6 +28,16 @@ Not bugs, but they can surprise you.
 ## Fixed
 
 Newest first. Commit hashes are on `main`.
+
+### 2026-11-10, "Wrap transcripts by screen columns" (B-10)
+
+- **B-10**: transcripts were wrapped at 80 *characters*, but a Korean
+  syllable takes two columns, so lines ran to 107-137 columns in a terminal.
+  `format_text` now wraps by display width (`unicodedata.east_asian_width`).
+  English text wraps byte for byte as before. Re-wrapping two real Korean
+  transcripts: widest line 137 -> 80 columns, 280 -> 434 and 144 -> 234
+  lines. Transcripts already on disk change only when recognised again.
+  Commit: `8f3e777`.
 
 ### 2026-11-10, "Take back the folder of a failed start" (B-8, B-9)
 
