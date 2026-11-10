@@ -24,8 +24,8 @@ Not bugs, but they can surprise you.
   is tapped before volume control. WASAPI is unchecked.
 - **Windows: several paths are unrun.** Keep-awake, the window refresh, the
   language choice, the device re-read, marks and the folder search have only
-  been run on Linux. The CI workflow runs the tests there, but has not yet
-  run on GitHub.
+  been run on Linux by hand. The CI workflow runs the tests on Windows too
+  (green since 2026-11-10), but they use no sound card or model.
 - **Marks can only be pressed in the window.** `scribe rec` has no key for
   it (raw keyboard reading on two platforms); a line added by hand to
   `<recording>.marks` counts. See D-24.
