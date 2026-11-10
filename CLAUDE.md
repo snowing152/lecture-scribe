@@ -236,6 +236,10 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 
 ## Recognition settings that must not drift
 
+- **`asr.hotwords` is empty by default and a nudge, not a fix.** Set, it goes
+  to faster-whisper as `hotwords`, never as `initial_prompt`, which would
+  reach only the first window with the previous text off (D-25).
+
 - **The language is always named, never auto detected.** `ko` by default;
   the window offers Korean and English, `scribe text --language` takes any
   code, and neither writes the choice back to `config.toml`. Auto detection

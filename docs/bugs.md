@@ -23,7 +23,22 @@ Not bugs, but they can surprise you.
 - **The volume slider does not affect the recording on PipeWire.** The monitor
   is tapped before volume control. WASAPI is unchecked.
 - **Windows: several paths are unrun.** Keep-awake, the window refresh, the
-  language choice and the device re-read have only been run on Linux.
+  language choice, the device re-read, marks and the folder search have only
+  been run on Linux. The CI workflow runs the tests there, but has not yet
+  run on GitHub.
+- **Marks can only be pressed in the window.** `scribe rec` has no key for
+  it (raw keyboard reading on two platforms); a line added by hand to
+  `<recording>.marks` counts. See D-24.
+- **Korean transcripts are about one and a half times as many lines** as
+  before 2026-11-10, since lines wrap at 80 screen columns instead of 80
+  characters. A phrase of several words meets a line break more often under
+  `grep`. Transcripts made earlier are unchanged.
+- **`asr.hotwords` was measured on one sample** (10 minutes of one lecture).
+  It corrected technical terms, cut one stretch of filler and halved the
+  number of segments. Compare on a lecture before relying on it. See D-25.
+- **A recording killed mid-lecture is skipped by `scribe text <folder>` for
+  30 seconds**, then transcribed like any other; name the file to do it at
+  once.
 
 ## Fixed
 
@@ -31,7 +46,9 @@ Newest first. Commit hashes are on `main`.
 
 ### 2026-11-10, "Fix what the review of the improvement plan found" (B-12 to B-17)
 
-Found by a cloud review of steps 1-7 before they reached `main`.
+Found by a cloud review of steps 1-7 before they reached `main`, in
+[`reviews/2026-11-10-improvement-plan.md`](reviews/2026-11-10-improvement-plan.md).
+Commit: `7bba0ef`.
 
 - **B-12**: a failed load of a cached model told the user to delete the
   weights folder, also for a local model directory (their only copy) and for

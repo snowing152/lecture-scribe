@@ -56,7 +56,7 @@ a timecode on every paragraph.
   even a crash keeps everything recorded so far. Recordings are never deleted
   or overwritten by the app.
 - **Works offline.** After a one-time model download, nothing leaves your
-  computer.
+  computer, and the model loads from disk without contacting the network.
 
 ## Install
 
