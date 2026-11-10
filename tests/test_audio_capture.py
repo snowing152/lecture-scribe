@@ -21,6 +21,7 @@ from lecture_scribe.audio_capture import (
     lecture_dir,
     loudness,
     recording_path,
+    remove_if_empty,
     resolve_device,
 )
 
@@ -72,6 +73,27 @@ def test_second_lecture_the_same_day_gets_its_own_folder(tmp_path: Path) -> None
 
     (tmp_path / "2026-09-09_os-2").mkdir()
     assert lecture_dir(tmp_path, "os", when) == tmp_path / "2026-09-09_os-3"
+
+
+def test_an_empty_folder_is_removed(tmp_path: Path) -> None:
+    folder = tmp_path / "2026-11-10_os"
+    folder.mkdir()
+
+    assert remove_if_empty(folder) is True
+    assert not folder.exists()
+
+
+def test_a_folder_holding_a_file_is_left_alone(tmp_path: Path) -> None:
+    folder = tmp_path / "2026-11-10_os"
+    folder.mkdir()
+    (folder / "2026-11-10_os.wav").write_bytes(b"RIFF")
+
+    assert remove_if_empty(folder) is False
+    assert (folder / "2026-11-10_os.wav").is_file()
+
+
+def test_a_folder_that_is_already_gone_is_not_an_error(tmp_path: Path) -> None:
+    assert remove_if_empty(tmp_path / "missing") is False
 
 
 def test_recording_is_named_after_its_folder(tmp_path: Path) -> None:

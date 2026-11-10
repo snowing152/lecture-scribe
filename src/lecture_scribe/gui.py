@@ -66,6 +66,7 @@ from lecture_scribe.audio_capture import (
     loudness,
     record_loopback,
     recording_path,
+    remove_if_empty,
     resolve_device,
 )
 from lecture_scribe.config import Config, ConfigError, load_config, merge_cli
@@ -1068,6 +1069,10 @@ class _Window(QWidget):
         so it is no longer offered for transcription.
         """
         self._recording = False
+        if self._wav is not None:
+            # Only an empty folder goes: one holding even a header-only WAV
+            # stays, since audio is never deleted automatically.
+            remove_if_empty(self._wav.parent)
         self._wav = None
         self._meter.reset()
         self._clock.setText(format_duration(0.0))

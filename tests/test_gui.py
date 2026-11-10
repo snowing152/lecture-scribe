@@ -119,6 +119,39 @@ def test_a_recording_that_never_started_is_not_offered_for_transcription(
     assert not window._text.isEnabled()
 
 
+def test_a_failed_start_takes_back_its_empty_folder(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    folder = tmp_path / "lectures" / "2026-11-10_os"
+    folder.mkdir(parents=True)
+    window._wav = folder / "2026-11-10_os.wav"
+    window._recording = True
+
+    window._on_record_failed("cannot record")
+
+    assert not folder.exists()
+
+
+def test_a_failed_start_keeps_a_folder_that_holds_audio(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    folder = tmp_path / "lectures" / "2026-11-10_os"
+    folder.mkdir(parents=True)
+    window._wav = folder / "2026-11-10_os.wav"
+    window._wav.write_bytes(b"RIFF")
+    window._recording = True
+
+    window._on_record_failed("cannot record")
+
+    assert (folder / "2026-11-10_os.wav").is_file()
+
+
 def test_a_recording_stopped_before_any_audio_is_not_offered(
     app: QApplication,  # noqa: ARG001
     devices: _Devices,  # noqa: ARG001

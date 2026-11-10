@@ -427,6 +427,29 @@ def lecture_dir(root: Path, course: str, when: datetime) -> Path:
     return candidate
 
 
+def remove_if_empty(folder: Path) -> bool:
+    """Take back a lecture folder that a failed start left empty.
+
+    The folder is created before the sound device is opened, so a device that
+    has gone away would otherwise leave an empty folder behind and push the
+    next attempt into ``<name>-2``. ``rmdir`` only removes an empty directory,
+    so a recording can never go with it; a folder holding anything, even a
+    header-only WAV, is left alone.
+
+    Args:
+        folder: The lecture folder, as picked by :func:`lecture_dir`.
+
+    Returns:
+        Whether the folder was removed. False for a folder that holds
+        something or is already gone.
+    """
+    try:
+        folder.rmdir()
+    except OSError:
+        return False
+    return True
+
+
 def recording_path(folder: Path) -> Path:
     """Name the recording after the lecture folder it goes into.
 

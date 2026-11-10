@@ -128,6 +128,18 @@ def test_notify_gives_up_on_a_desktop_that_never_answers(
     _notify("recording a lecture")
 
 
+def test_notify_survives_a_program_that_will_not_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(shutil, "which", lambda _name: "notify-send")
+    monkeypatch.setattr(subprocess, "run", broken)
+
+    _notify("recording a lecture")
+
+
 @pytest.mark.manual
 def test_the_desktop_takes_and_gives_back_the_request() -> None:
     """Needs a Linux desktop session serving org.freedesktop.ScreenSaver."""

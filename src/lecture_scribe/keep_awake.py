@@ -260,7 +260,9 @@ def _notify(reason: str) -> None:
             capture_output=True,
             timeout=_NOTIFY_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired:
+    # OSError too: a notify-send that is on the PATH but will not start must
+    # not be what stops a lecture from being recorded.
+    except (subprocess.TimeoutExpired, OSError):
         return
 
 

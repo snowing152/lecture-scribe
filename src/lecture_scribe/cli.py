@@ -23,6 +23,7 @@ from lecture_scribe.audio_capture import (
     loudness,
     record_loopback,
     recording_path,
+    remove_if_empty,
     resolve_device,
 )
 from lecture_scribe.config import (
@@ -238,11 +239,7 @@ def _rec(config: Config, course: str) -> int:
     awake = keep_awake("recording a lecture")
     if stop.is_set():
         awake.release()
-        # rmdir removes only an empty directory, so no recording can go with
-        # it; if something did land in the folder, it is left alone.
-        try:
-            folder.rmdir()
-        except OSError:
+        if not remove_if_empty(folder):
             print(f"stopped before recording began; {folder} was left as it is")
             return 130
         print("stopped before recording began; nothing was created")
@@ -274,6 +271,8 @@ def _rec(config: Config, course: str) -> int:
     except AudioDeviceError as error:
         status.clear()
         print(f"audio error: {error}", file=sys.stderr)
+        # Nothing was recorded, so the folder made for it is not wanted either.
+        remove_if_empty(folder)
         return 1
     finally:
         awake.release()
