@@ -151,3 +151,25 @@ def test_section_must_be_a_table(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match=r"\[audio\] must be a table"):
         load_config(path)
+
+
+def test_hotwords_are_read_and_default_to_nothing(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[asr]\nhotwords = "TCP 혼잡 제어"\n')
+
+    assert load_config(path).asr.hotwords == "TCP 혼잡 제어"
+    assert load_config(_write(tmp_path, "[asr]\n")).asr.hotwords == ""
+
+
+def test_hotwords_must_be_one_string(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[asr]\nhotwords = ["TCP", "UDP"]\n')
+
+    with pytest.raises(ConfigError, match=r"asr\.hotwords must be a string"):
+        load_config(path)
+
+
+def test_the_hotwords_flag_overrides_the_file() -> None:
+    config = merge_cli(Config(), hotwords="K-means")
+
+    assert config.asr.hotwords == "K-means"
+    assert merge_cli(config).asr.hotwords == "K-means"
+    assert merge_cli(Config()).asr.hotwords == ""

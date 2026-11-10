@@ -186,3 +186,17 @@ transcribing the recording again, lost it. Each mark is now appended to
 - **Append only:** the file is never deleted or rewritten automatically (D-7).
 **Not done:** pressing marks from `scribe rec`; it needs raw keyboard reading
 in a terminal on two platforms. A line can be added by hand.
+
+### D-25 · 2026-11-10 · active: Terms of the course go in as `hotwords`
+
+`asr.hotwords` (and `scribe text --hotwords`) hands the decoder a list of
+terms to lean towards. Empty by default, so nothing changes unless it is set.
+- **`hotwords`, not `initial_prompt`:** faster-whisper adds hotwords to the
+  prompt of every decoding window; an initial prompt reaches only the first
+  once the previous text is off (D-9). Checked in the installed code.
+- **Not part of D-9's fixed settings:** it is a setting of the course, like
+  the language (D-21), so the window reads it from `config.toml` and has no
+  field for it.
+**Measured once** on 10 minutes of one lecture: technical terms came out
+right, a little filler was cut, segments halved. See `CLAUDE.md`. Anyone
+setting it should compare on one lecture first.
