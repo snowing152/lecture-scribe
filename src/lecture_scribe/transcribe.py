@@ -544,6 +544,27 @@ def earlier_transcript(wav: Path) -> Path | None:
     return next((path for path in candidates if path.is_file()), None)
 
 
+def pending_recordings(folder: Path) -> list[Path]:
+    """Find the recordings under a folder that have no transcript yet.
+
+    For catching up on an archive: a recording counts as done when
+    :func:`earlier_transcript` finds a transcript for it under any of the
+    names a transcript has had, so a lecture whose folder was renamed is not
+    recognised a second time.
+
+    Args:
+        folder: Directory to search, however deeply the lectures are nested.
+
+    Returns:
+        The ``.wav`` files without a transcript, in path order.
+    """
+    return [
+        wav
+        for wav in sorted(folder.rglob("*.wav"))
+        if wav.is_file() and earlier_transcript(wav) is None
+    ]
+
+
 def _cublas_available() -> bool:
     """Whether the CUDA library CTranslate2 needs can be loaded.
 

@@ -47,6 +47,7 @@ from lecture_scribe.transcribe import (
     gpu_status,
     load_model,
     model_status,
+    pending_recordings,
     shared_transcripts,
     transcribe,
     transcript_path,
@@ -114,7 +115,13 @@ def _build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--device", help="substring of the output device to record")
 
     text = commands.add_parser("text", help="transcribe one or more recordings")
-    text.add_argument("wav", nargs="+", type=Path, help="WAV files to transcribe")
+    text.add_argument(
+        "wav",
+        nargs="+",
+        type=Path,
+        help="WAV files to transcribe, or folders to search for recordings "
+        "that have no transcript yet",
+    )
     text.add_argument("--model", help="override the configured ASR model")
     text.add_argument(
         "--language",
@@ -329,17 +336,32 @@ def _text(config: Config, wavs: list[Path]) -> int:
 
     Args:
         config: Effective configuration, command line overrides applied.
-        wavs: Recordings to transcribe.
+        wavs: Recordings to transcribe, and folders to search for recordings
+            that have no transcript yet. A folder with none left is not an
+            error.
 
     Returns:
         The process exit code: 0 if every file transcribed, 1 if any failed.
     """
     failures = 0
     readable = []
+    # A folder stands for the recordings in it that still lack a transcript.
+    # A file named outright is transcribed whether it has one or not.
+    candidates: list[Path] = []
+    searched = False
+    for given in wavs:
+        if not given.is_dir():
+            candidates.append(given)
+            continue
+        searched = True
+        found = pending_recordings(given)
+        print(f"{given}: {len(found)} recording(s) without a transcript")
+        candidates.extend(found)
+
     # A file named twice, by overlapping globs say, is one recording rather
     # than two that clash, so it is transcribed once under its first spelling.
     seen: set[Path] = set()
-    for wav in wavs:
+    for wav in candidates:
         if wav.resolve() in seen:
             continue
         seen.add(wav.resolve())
@@ -378,6 +400,9 @@ def _text(config: Config, wavs: list[Path]) -> int:
     readable = [wav for wav in readable if wav not in clashing]
 
     if not readable:
+        if searched and not failures:
+            print("nothing left to transcribe")
+            return 0
         return 1
 
     # Loading the model, and on a first run downloading it, is part of the
