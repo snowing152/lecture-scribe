@@ -6,7 +6,7 @@ date and commit. Do not delete it.
 
 ## Open
 
-None. The next one found gets id B-7.
+None. The next one found gets id B-8.
 
 ## Known limitations
 
@@ -28,6 +28,16 @@ Not bugs, but they can surprise you.
 ## Fixed
 
 Newest first. Commit hashes are on `main`.
+
+### 2026-11-10, "Load a cached model without touching the network" (B-7)
+
+- **B-7**: `load_model` never passed `local_files_only`, so faster-whisper
+  asked Hugging Face on every load even with the weights on disk, against
+  the promise that nothing leaves the machine. Measured by counting
+  `socket.connect` calls during a load of the cached large-v3: one to port
+  443 before, none after. `load_model` now passes `local_files_only` when
+  `model_status` finds the weights, and a cached model that will not load
+  says its folder may be incomplete. Commit: see the log.
 
 ### 2026-11-09, "Fix what the third review found" (B-1 to B-6)
 
