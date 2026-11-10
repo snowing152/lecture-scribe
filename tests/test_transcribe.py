@@ -22,6 +22,7 @@ from lecture_scribe.transcribe import (
     hub_cache_dir,
     load_model,
     model_status,
+    pending_recordings,
     shared_transcripts,
     transcribe,
     transcript_path,
@@ -611,3 +612,35 @@ def test_a_failed_write_leaves_the_earlier_transcript_whole(
     monkeypatch.undo()
     assert target.read_text(encoding="utf-8") == "the complete transcript\n"
     assert list(tmp_path.iterdir()) == [target]
+
+
+def _wav(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    return path
+
+
+def test_pending_recordings_finds_the_ones_without_a_transcript(
+    tmp_path: Path,
+) -> None:
+    done = _wav(tmp_path / "BigData" / "2026-10-28_a" / "2026-10-28_a.wav")
+    (done.parent / "2026-10-28_a.txt").touch()
+    todo = _wav(tmp_path / "CN" / "2026-11-02_b" / "2026-11-02_b.wav")
+
+    assert pending_recordings(tmp_path) == [todo]
+
+
+def test_a_transcript_under_an_older_name_counts_as_done(tmp_path: Path) -> None:
+    renamed = _wav(tmp_path / "title" / "2026-09-10_os.wav")
+    (renamed.parent / "2026-09-10_os.txt").touch()
+    old = _wav(tmp_path / "older" / "audio.wav")
+    (old.parent / "transcript.txt").touch()
+
+    assert pending_recordings(tmp_path) == []
+
+
+def test_pending_recordings_come_back_in_path_order(tmp_path: Path) -> None:
+    second = _wav(tmp_path / "b" / "b.wav")
+    first = _wav(tmp_path / "a" / "a.wav")
+
+    assert pending_recordings(tmp_path) == [first, second]

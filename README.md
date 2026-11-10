@@ -386,6 +386,7 @@ of these, or leave it off after `uv tool install`.
 | `scribe doctor` | show devices, model and GPU; changes nothing |
 | `scribe rec --course os` | record until <kbd>Ctrl</kbd>+<kbd>C</kbd> |
 | `scribe text lecture.wav` | transcribe one or more recordings, writing a `.txt` beside each |
+| `scribe text ~/lectures` | give it a folder instead: every recording under it that has no transcript yet |
 | `scribe gui` | open the window |
 | `scribe launcher` | add the window to the Start Menu / app menu (`--remove` undoes it) |
 
@@ -411,7 +412,8 @@ computer. Record on a laptop and transcribe later on a faster machine.
 quickest way to catch up on a week of lectures:
 
 ```bash
-scribe text ~/lectures/*/*.wav
+scribe text ~/lectures                      # only what has no transcript yet
+scribe text ~/lectures/*/*.wav              # or name the files, done or not
 scribe text --model large-v3 lecture.wav    # another model, without editing config.toml
 scribe text --language en lecture.wav       # a lecture given in English
 scribe text --hotwords "FIFO Round Robin" lecture.wav   # terms to listen for
@@ -481,6 +483,8 @@ reason, and [`docs/bugs.md`](./docs/bugs.md) lists open and fixed bugs.
 | R | window refresh: rounded surfaces, state chip, signal colours | done |
 | K | language choice: Korean or English, never automatic | done |
 | M | marks saved beside the recording | done |
+| H | `asr.hotwords`, terms of the course as a hint | done |
+| F | `scribe text` on a folder | done |
 
 </details>
 
