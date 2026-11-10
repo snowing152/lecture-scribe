@@ -6,7 +6,7 @@ date and commit. Do not delete it.
 
 ## Open
 
-None. The next one found gets id B-8.
+None. The next one found gets id B-10.
 
 ## Known limitations
 
@@ -28,6 +28,17 @@ Not bugs, but they can surprise you.
 ## Fixed
 
 Newest first. Commit hashes are on `main`.
+
+### 2026-11-10, "Take back the folder of a failed start" (B-8, B-9)
+
+- **B-8**: a recording that failed to start (an unplugged device, no
+  loopback input) left its empty lecture folder behind, and the next attempt
+  went into `<name>-2`. `remove_if_empty` removes the folder, and only when
+  it is empty, so audio is never touched (D-7). Both front ends call it. A
+  failure after the WAV exists leaves the header-only file and its folder.
+- **B-9**: `notify-send` on the PATH that would not start raised `OSError`
+  out of `keep_awake`, and the recording never began. It is now ignored like
+  a timeout. Commit: `5a5ff29`.
 
 ### 2026-11-10, "Load a cached model without touching the network" (B-7)
 
