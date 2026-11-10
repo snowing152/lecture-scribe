@@ -8,12 +8,19 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QWidget
 
 from lecture_scribe import gui
-from lecture_scribe.audio_capture import LoopbackDevice, Recording
+from lecture_scribe.audio_capture import (
+    LoopbackDevice,
+    Recording,
+    marks_path,
+    read_marks,
+)
 from lecture_scribe.config import AsrConfig, Config, OutputConfig
 
 _SPEAKERS = LoopbackDevice(name="Speakers", id="alsa.speakers", is_default=True)
@@ -360,3 +367,100 @@ def test_window_opens_and_lists_the_devices() -> None:
 
     assert window.windowTitle() == "lecture scribe"
     assert window._device_box.count() == len(window._devices)
+
+
+def test_a_mark_is_saved_beside_the_recording_as_it_is_pressed(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    window._wav = tmp_path / "lecture.wav"
+    window._recording = True
+    window._elapsed = 42.0
+
+    window._mark_moment()
+
+    assert read_marks(window._wav) == [42.0]
+    assert window._marks == [42.0]
+
+
+def test_a_mark_that_cannot_be_saved_is_still_kept_and_reported(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    window._wav = tmp_path / "missing" / "lecture.wav"
+    window._recording = True
+    window._elapsed = 7.0
+
+    window._mark_moment()
+
+    assert window._marks == [7.0]
+    assert "could not be saved" in window._status.text()
+
+
+def _wav(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(path, np.zeros(1600, dtype=np.float32), 16000)
+    return path
+
+
+def test_opening_a_recording_loads_the_marks_made_for_it(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _window(tmp_path)
+    wav = _wav(tmp_path / "a" / "a.wav")
+    marks_path(wav).write_text("5.0\n9.5\n", encoding="utf-8")
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *_a, **_k: (str(wav), "")
+    )
+
+    window._open_recording()
+
+    assert window._marks == [5.0, 9.5]
+
+
+def test_opening_a_recording_without_marks_drops_the_previous_ones(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _window(tmp_path)
+    window._marks = [1.0, 2.0]
+    wav = _wav(tmp_path / "b" / "b.wav")
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *_a, **_k: (str(wav), "")
+    )
+
+    window._open_recording()
+
+    assert window._marks == []
+
+
+def test_a_damaged_marks_file_leaves_the_open_recording_as_it_was(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _window(tmp_path)
+    kept = _wav(tmp_path / "kept" / "kept.wav")
+    window._wav = kept
+    window._marks = [3.0]
+    broken = _wav(tmp_path / "broken" / "broken.wav")
+    marks_path(broken).write_text("soon\n", encoding="utf-8")
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *_a, **_k: (str(broken), "")
+    )
+
+    window._open_recording()
+
+    assert window._wav == kept
+    assert window._marks == [3.0]
+    assert "line 1" in window._status.text()

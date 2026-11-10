@@ -59,11 +59,13 @@ from lecture_scribe.audio_capture import (
     LoopbackDevice,
     Progress,
     Recording,
+    append_mark,
     dbfs,
     inspect_recording,
     lecture_dir,
     list_loopback_devices,
     loudness,
+    read_marks,
     record_loopback,
     recording_path,
     remove_if_empty,
@@ -1109,13 +1111,23 @@ class _Window(QWidget):
 
     def _mark_moment(self) -> None:
         """Flag the current offset so its paragraph is prefixed with ``>>>``."""
-        if not self._recording:
+        if not self._recording or self._wav is None:
             return
         self._marks.append(self._elapsed)
-        self._say(
+        message = (
             f"marked {format_timecode(self._elapsed)} "
             f"({len(self._marks)} in this lecture)"
         )
+        try:
+            append_mark(self._wav, self._elapsed)
+        except OSError as error:
+            # Kept in memory regardless, so this window still uses it.
+            self._say(
+                f"{message}, but it could not be saved beside the recording: {error}",
+                problem=True,
+            )
+            return
+        self._say(message)
 
     def _open_recording(self) -> None:
         """Pick a recording made earlier and make it the one to transcribe.
@@ -1143,15 +1155,28 @@ class _Window(QWidget):
             self._say(str(error), problem=True)
             return
 
+        # Read before anything changes, so a damaged marks file leaves the
+        # recording that was open as it was.
+        try:
+            marks = read_marks(path)
+        except (ValueError, OSError) as error:
+            self._say(str(error), problem=True)
+            return
+
         self._wav = path
-        # Marks belong to the lecture they were pressed during. Carrying them
-        # onto a file opened afterwards would put >>> on unrelated sentences.
-        self._marks = []
+        # The marks of this recording, from the file made as they were
+        # pressed; an empty list for a recording with none. Carrying the last
+        # lecture's over would put >>> on unrelated sentences.
+        self._marks = marks
         self._elapsed = 0.0
         self._meter.reset()
         self._clock.setText(format_duration(existing.duration))
         self._levels.setText(f"{existing.size_bytes / 1_000_000:.1f} MB")
         self._show_earlier_transcript(existing)
+        if marks:
+            self._say(
+                f"{self._status.text()} · {_plural(len(marks), 'mark')}", path=path
+            )
         self._refresh()
 
     def _show_earlier_transcript(self, existing: ExistingRecording) -> None:

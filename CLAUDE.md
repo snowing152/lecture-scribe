@@ -59,7 +59,7 @@ one core.
 ## Layout
 
 ```
-audio_capture.py   system audio -> WAV on disk, plus device discovery
+audio_capture.py   system audio -> WAV on disk, device discovery, the marks file
 transcribe.py      WAV -> list[Segment], plus model and GPU readiness
 format_text.py     segments -> transcript text (pure)
 config.py          config.toml -> frozen dataclasses
@@ -159,9 +159,12 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   name in the header of the `.txt` -- both recordings in `~/lectures` on this
   machine still say `2026-09-10_os` inside, under folders since renamed to
   lecture titles.
-- Marks belong to the recording they were pressed during, never to a file
-  opened afterwards. `_open_recording` clears them, or `>>>` would land on
-  unrelated sentences.
+- **Marks belong to the recording they were pressed during, and live in
+  `<recording>.marks`** beside it, one offset in seconds per line, appended
+  the moment the key is pressed. `_open_recording` and `scribe text` read the
+  file of the recording at hand, so a mark survives closing the window and
+  re-recognising the lecture, and never lands on an unrelated file. A line
+  that is not a number is an error, not skipped.
 - **`model.transcribe()` hands back its info object before it decodes a
   single segment**, so the length of the audio is known up front and real
   progress can be shown rather than a spinner. The segments themselves are a
@@ -293,3 +296,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |
 | K | language choice: Korean / English in the window, `scribe text --language` | done — checked by hand on Linux; not yet looked at on Windows |
+| M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |

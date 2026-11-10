@@ -168,3 +168,46 @@ def test_a_transcript_that_cannot_be_written_stops_the_batch(
     assert "cannot write" in capsys.readouterr().err
     assert recognised == [blocked]
     assert not (later.parent / "later.txt").exists()
+
+
+def test_a_damaged_marks_file_fails_before_the_model_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    wav = _lecture(tmp_path, "os")
+    sf.write(wav, np.zeros(1600, dtype=np.float32), 16000)
+    wav.with_suffix(".marks").write_text("1.0\nsoon\n", encoding="utf-8")
+
+    def never(*_args: object, **_kwargs: object) -> int:
+        raise AssertionError("the model must not be loaded")
+
+    monkeypatch.setattr(cli, "_transcribe_all", never)
+
+    assert cli._text(Config(), [wav]) == 1
+    assert "line 2" in capsys.readouterr().err
+
+
+def test_marks_reach_the_transcript_written_by_the_command_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wav = _lecture(tmp_path, "os")
+    wav.with_suffix(".marks").write_text("4.0\n", encoding="utf-8")
+    result = Transcription(
+        segments=[
+            Segment(0.0, 2.0, "첫 문장.", -0.1),
+            Segment(10.0, 12.0, "둘째 문장.", -0.1),
+        ],
+        audio_duration=12.0,
+        decode_seconds=0.1,
+    )
+    monkeypatch.setattr(cli, "load_model", lambda *_args, **_kwargs: _Model())
+    monkeypatch.setattr(cli, "transcribe", lambda *_a, **_k: result)
+    monkeypatch.setattr(cli, "_install_stop_handler", lambda *_args, **_kwargs: None)
+
+    assert cli._transcribe_all(Config(), [wav], failures=0) == 0
+
+    text = (wav.parent / "os.txt").read_text(encoding="utf-8")
+    assert ">>> [00:00] 첫 문장." in text
+    assert ">>> [00:10]" not in text
