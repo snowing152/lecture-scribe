@@ -144,6 +144,16 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   without which Qt breaks `00:47` one character per line.
 - The pane copies the file's own text on select all, not what it shows: a
   table copies one cell per line. `_Transcript.createMimeDataFromSelection`.
+- **Hotwords help on technical terms, once measured.** `faster-whisper`
+  puts `hotwords` in the prompt of every decoding window, where an
+  `initial_prompt` would reach only the first because
+  `condition_on_previous_text` is off. One sample, 10 minutes (minutes 20-30)
+  of the 컴넷 8-2 lecture on the GPU, 20 terms given: `FIFO` 0 -> 4 (it was
+  `FIFA`), `Weighted Fair Queueing` 0 -> 2 (it was `Rated Fair King`),
+  `스루풋`, `체크섬`, `패킷` for `스로프`, `헤더 체크션`, `패켓`. Cost: 833 ->
+  755 words, one filler span of about 12 words gone, and segments halved
+  (125 -> 63), which leaves `paragraph_target` fewer places to break. No
+  listed word was seen where it was not said, but only one sample was read.
 - **`textwrap` counts characters, and a Korean syllable is two columns.**
   Transcripts wrapped at 80 characters ran to 107-137 columns on screen, so
   `format_text._wrap` wraps by `east_asian_width` instead. Cost: about one
@@ -296,4 +306,5 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |
 | K | language choice: Korean / English in the window, `scribe text --language` | done — checked by hand on Linux; not yet looked at on Windows |
+| H | `asr.hotwords` / `scribe text --hotwords`: terms of the course as a decoding hint | done — measured once, see below |
 | M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |

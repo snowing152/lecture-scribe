@@ -358,6 +358,7 @@ def transcribe(
     *,
     language: str,
     beam_size: int,
+    hotwords: str = "",
     on_progress: Callable[[Decoding], None] | None = None,
     stop: threading.Event | None = None,
 ) -> Transcription:
@@ -376,6 +377,12 @@ def transcribe(
         wav: Recording to transcribe.
         language: Spoken language, as a Whisper language code.
         beam_size: Beam search width.
+        hotwords: Words to nudge the decoder towards, such as the terms of the
+            course. faster-whisper puts them in the prompt of every decoding
+            window, not only the first, which is why this is used rather
+            than ``initial_prompt``: with the previous text switched off, an
+            initial prompt would reach the first window alone. Empty adds
+            nothing.
         on_progress: Called with each segment as the decoder finishes it.
             The total length is known before the first one arrives, so a
             caller can show real progress rather than a spinner.
@@ -405,6 +412,7 @@ def transcribe(
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
+            hotwords=hotwords.strip() or None,
         )
         # The length is known before any segment is decoded, which is what
         # makes progress reportable at all.

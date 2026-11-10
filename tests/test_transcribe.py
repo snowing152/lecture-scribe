@@ -376,6 +376,20 @@ def test_transcribe_materializes_segments_and_strips_whitespace(tmp_path: Path) 
     assert result.audio_duration == pytest.approx(90.0)
 
 
+def test_hotwords_reach_the_decoder_and_empty_ones_do_not(tmp_path: Path) -> None:
+    wav = tmp_path / "audio.wav"
+    wav.touch()
+    model = _FakeModel(segments=[], duration=0.0)
+
+    transcribe(model, wav, language="ko", beam_size=5, hotwords="  TCP 혼잡 제어 ")
+    transcribe(model, wav, language="ko", beam_size=5)
+    transcribe(model, wav, language="ko", beam_size=5, hotwords="   ")
+
+    assert model.calls[0]["hotwords"] == "TCP 혼잡 제어"
+    assert model.calls[1]["hotwords"] is None
+    assert model.calls[2]["hotwords"] is None
+
+
 def test_transcribe_passes_the_fixed_decoding_settings(tmp_path: Path) -> None:
     wav = tmp_path / "audio.wav"
     wav.touch()

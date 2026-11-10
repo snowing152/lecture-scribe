@@ -85,7 +85,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         wavs: list[Path] = args.wav
         model: str | None = args.model
         language: str | None = args.language
-        return _text(merge_cli(config, model=model, language=language), wavs)
+        hotwords: str | None = args.hotwords
+        return _text(
+            merge_cli(config, model=model, language=language, hotwords=hotwords),
+            wavs,
+        )
     if command == "gui":
         return _gui(config)
     if command == "launcher":
@@ -116,6 +120,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--language",
         help="spoken language as a Whisper code, such as ko or en; "
         "overrides asr.language",
+    )
+    text.add_argument(
+        "--hotwords",
+        help="words the lecture is likely to contain, such as the terms of the "
+        "course, in one quoted string; overrides asr.hotwords",
     )
 
     commands.add_parser("gui", help="open the desktop window")
@@ -392,9 +401,10 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
     """
     # The language is named here because it is the one setting a single run
     # can now change, and the wrong one costs a whole recognition.
+    hinted = ", with hotwords" if config.asr.hotwords.strip() else ""
     print(
         f"loading {config.asr.model} ({compute_type(config.asr.gpu)}), "
-        f"language {config.asr.language} ..."
+        f"language {config.asr.language}{hinted} ..."
     )
     try:
         model = load_model(config.asr.model, gpu=config.asr.gpu)
@@ -432,6 +442,7 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
                 wav,
                 language=config.asr.language,
                 beam_size=config.asr.beam_size,
+                hotwords=config.asr.hotwords,
                 on_progress=lambda decoding: status.draw(_decoding_line(decoding)),
                 stop=stop,
             )
@@ -681,6 +692,8 @@ def _asr_report(config: Config) -> list[str]:
     )
     _row("weights", weights)
     _row("location", str(status.location))
+    if config.asr.hotwords.strip():
+        _row("hotwords", config.asr.hotwords.strip())
     _row("gpu", gpu.detail)
     _row(
         "compute type",

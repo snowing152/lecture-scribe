@@ -51,12 +51,17 @@ class AsrConfig:
             from the opening thirty seconds and applies the guess to the
             whole file, and it has taken Korean for Japanese there.
         beam_size: Beam search width passed to the decoder.
+        hotwords: Words the lecture is likely to contain, such as the terms
+            of the course, which the decoder is nudged towards. Empty, the
+            default, adds nothing. Only a nudge: it can also make the model
+            hear a listed word where none was said.
     """
 
     model: str = "large-v3"
     gpu: bool = False
     language: str = "ko"
     beam_size: int = 5
+    hotwords: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +144,7 @@ def merge_cli(
     device: str | None = None,
     model: str | None = None,
     language: str | None = None,
+    hotwords: str | None = None,
 ) -> Config:
     """Apply command line overrides on top of the file settings.
 
@@ -151,6 +157,8 @@ def merge_cli(
         model: Value of ``--model``, or ``None`` when the flag was absent.
         language: Value of ``--language``, or ``None`` when the flag was
             absent.
+        hotwords: Value of ``--hotwords``, or ``None`` when the flag was
+            absent.
 
     Returns:
         A new configuration; the input is left untouched.
@@ -162,6 +170,8 @@ def merge_cli(
         result = replace(result, asr=replace(result.asr, model=model))
     if language is not None:
         result = replace(result, asr=replace(result.asr, language=language))
+    if hotwords is not None:
+        result = replace(result, asr=replace(result.asr, hotwords=hotwords))
     return result
 
 
@@ -196,6 +206,7 @@ def _asr(raw: Mapping[str, Any]) -> AsrConfig:
         gpu=_bool("asr", raw, "gpu", default.gpu),
         language=_str("asr", raw, "language", default.language),
         beam_size=_int("asr", raw, "beam_size", default.beam_size, minimum=1),
+        hotwords=_str("asr", raw, "hotwords", default.hotwords),
     )
 
 

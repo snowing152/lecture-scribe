@@ -368,6 +368,7 @@ class _TranscribeWorker(QThread):
                 self._wav,
                 language=asr.language,
                 beam_size=asr.beam_size,
+                hotwords=asr.hotwords,
                 on_progress=self.progressed.emit,
                 stop=self._stop,
             )

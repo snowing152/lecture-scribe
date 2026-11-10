@@ -8,6 +8,7 @@ model = "large-v3"
 gpu = false
 language = "ko"          # "en" for English; the window starts on this one
 beam_size = 5
+hotwords = ""            # terms of the course, e.g. "TCP 혼잡 제어 슬라이딩 윈도우"
 
 [output]
 dir = "~/lectures"

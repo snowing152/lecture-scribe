@@ -345,10 +345,24 @@ work as they are.
 | `asr.gpu` | `false` | use an NVIDIA card; see [above](#faster-with-an-nvidia-card) |
 | `asr.language` | `"ko"` | spoken language the window starts on, such as `"ko"` or `"en"`; never auto-detected |
 | `asr.beam_size` | `5` | how many alternatives the model weighs |
+| `asr.hotwords` | `""` | terms the lecture is likely to contain, in one string, such as `"TCP 혼잡 제어 FIFO"`; see below |
 | `output.dir` | `"~/lectures"` | where lecture folders go |
 | `output.paragraph_gap` | `1.2` | seconds of pause that start a new paragraph |
 | `output.paragraph_target` | `90` | after this many seconds, end the paragraph at the next sentence |
 | `output.paragraph_max` | `180` | after this many seconds, end it at the next chance, sentence or not; `0` turns either off |
+
+<details>
+<summary>What <code>asr.hotwords</code> does</summary>
+<br>
+
+The model gets the words as a hint with every half-minute stretch of audio,
+so rare terms such as `FIFO` or `Weighted Fair Queueing` are more likely to be
+written as they are spelled, where otherwise they might come out as `FIFA` or
+`Rated Fair Queen`. It is only a nudge: the model may also write a listed word
+where nothing like it was said, and it may cut a stretch of filler. Try it on
+one lecture and compare before making it a habit. Leave it empty for no hint.
+
+</details>
 
 <details>
 <summary>Why paragraphs need two time limits</summary>
@@ -400,6 +414,7 @@ quickest way to catch up on a week of lectures:
 scribe text ~/lectures/*/*.wav
 scribe text --model large-v3 lecture.wav    # another model, without editing config.toml
 scribe text --language en lecture.wav       # a lecture given in English
+scribe text --hotwords "FIFO Round Robin" lecture.wav   # terms to listen for
 ```
 
 <kbd>Ctrl</kbd>+<kbd>C</kbd> during `text` stops at the end of the current
