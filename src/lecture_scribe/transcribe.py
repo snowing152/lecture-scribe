@@ -283,6 +283,11 @@ def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped librar
     Returns:
         A ``faster_whisper.WhisperModel`` ready to transcribe.
 
+    Weights already on disk are loaded without touching the network. A
+    model name that :func:`model_status` cannot find in the cache, such as an
+    unusual one, is still handed to faster-whisper as before, which may ask
+    the hub.
+
     Raises:
         TranscriptionError: The weights could not be read or downloaded, or
             the requested device or compute type is not supported. A missing
@@ -293,12 +298,27 @@ def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped librar
     device = "cuda" if gpu else "cpu"
     if gpu:
         _preload_cuda_libraries()
+    status = model_status(model)
     try:
+        # Without this faster-whisper checks the hub on every load, even with
+        # the weights on disk, which breaks the promise that nothing leaves
+        # the machine after the first download.
         return faster_whisper.WhisperModel(
-            model, device=device, compute_type=compute_type(gpu)
+            model,
+            device=device,
+            compute_type=compute_type(gpu),
+            local_files_only=status.cached,
         )
     except (OSError, ValueError, RuntimeError) as error:
-        raise TranscriptionError(f"cannot load model '{model}': {error}") from error
+        advice = (
+            f". The weights in {status.location} may be incomplete: delete "
+            "that folder and run again to download them afresh"
+            if status.cached
+            else ""
+        )
+        raise TranscriptionError(
+            f"cannot load model '{model}': {error}{advice}"
+        ) from error
 
 
 def check_language(model: Any, language: str) -> None:  # noqa: ANN401 (untyped library)

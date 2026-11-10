@@ -258,6 +258,10 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   names `libcublas.so.12` and carries no cuDNN reference at all, whatever
   the faster-whisper documentation says. That halves what the `cuda` extra
   has to install.
+- **faster-whisper asks the hub on every load unless told not to.** Without
+  `local_files_only=True`, `WhisperModel` calls `snapshot_download` even with
+  the weights on disk. Measured here: one connection to port 443 per load,
+  none once `load_model` passes `local_files_only` for a cached model.
 - **The CUDA wheels are not on the loader's path.** They unpack into
   `site-packages/nvidia/*/lib`, where a bare `dlopen` never looks, so
   `transcribe._preload_cuda_libraries` loads them by full path first. Two

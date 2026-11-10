@@ -657,7 +657,9 @@ def _asr_report(config: Config) -> list[str]:
 
     _row("model", f"{config.asr.model}, language {config.asr.language}")
     weights = (
-        "on disk" if status.cached else "not downloaded, fetched on first `scribe text`"
+        "on disk, loaded without the network"
+        if status.cached
+        else "not downloaded, fetched on first `scribe text`"
     )
     _row("weights", weights)
     _row("location", str(status.location))

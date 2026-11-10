@@ -5,6 +5,8 @@ import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -18,6 +20,7 @@ from lecture_scribe.transcribe import (
     earlier_transcript,
     gpu_status,
     hub_cache_dir,
+    load_model,
     model_status,
     shared_transcripts,
     transcribe,
@@ -147,6 +150,86 @@ def test_local_model_directory_is_read_directly(tmp_path: Path) -> None:
 
     assert status.cached is True
     assert status.location == tmp_path
+
+
+class _FakeWhisperModel:
+    """Stand-in for faster_whisper.WhisperModel that keeps its arguments."""
+
+    seen: ClassVar[dict[str, object]] = {}
+    failure: ClassVar[Exception | None] = None
+
+    def __init__(self, name: str, **kwargs: object) -> None:
+        if _FakeWhisperModel.failure is not None:
+            raise _FakeWhisperModel.failure
+        _FakeWhisperModel.seen = {"name": name, **kwargs}
+
+
+def _fake_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeWhisperModel.seen = {}
+    _FakeWhisperModel.failure = None
+    monkeypatch.setattr(
+        transcribe_module,
+        "_import_faster_whisper",
+        lambda: SimpleNamespace(WhisperModel=_FakeWhisperModel),
+    )
+
+
+def _cache_model(root: Path) -> Path:
+    snapshot = root / "models--Systran--faster-whisper-large-v3" / "snapshots" / "x"
+    snapshot.mkdir(parents=True)
+    (snapshot / "model.bin").touch()
+    return root / "models--Systran--faster-whisper-large-v3"
+
+
+def test_a_cached_model_is_loaded_without_the_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _cache_model(tmp_path)
+    _fake_faster_whisper(monkeypatch)
+
+    load_model("large-v3", gpu=False)
+
+    assert _FakeWhisperModel.seen["local_files_only"] is True
+
+
+def test_a_model_not_on_disk_is_allowed_to_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _fake_faster_whisper(monkeypatch)
+
+    load_model("large-v3", gpu=False)
+
+    assert _FakeWhisperModel.seen["local_files_only"] is False
+
+
+def test_a_cached_model_that_will_not_load_suggests_downloading_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    folder = _cache_model(tmp_path)
+    _fake_faster_whisper(monkeypatch)
+    _FakeWhisperModel.failure = OSError("truncated")
+
+    with pytest.raises(TranscriptionError) as caught:
+        load_model("large-v3", gpu=False)
+
+    assert str(folder) in str(caught.value)
+    assert "incomplete" in str(caught.value)
+
+
+def test_a_failed_download_does_not_blame_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _fake_faster_whisper(monkeypatch)
+    _FakeWhisperModel.failure = OSError("offline")
+
+    with pytest.raises(TranscriptionError) as caught:
+        load_model("large-v3", gpu=False)
+
+    assert "incomplete" not in str(caught.value)
 
 
 def test_hub_cache_dir_prefers_the_most_specific_variable(
