@@ -306,6 +306,7 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | A | `keep_awake.py`: no lock or suspend while recording or transcribing, announced by a notification | done — verified on Linux against Noctalia; the Windows branch is unrun |
 | R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |
 | K | language choice: Korean / English in the window, `scribe text --language` | done — checked by hand on Linux; not yet looked at on Windows |
+| C | `.github/workflows/ci.yml`: format, lint, mypy and tests on Linux and Windows | written, **not yet run on GitHub** |
 | F | `scribe text <folder>`: every recording under it without a transcript | done |
 | H | `asr.hotwords` / `scribe text --hotwords`: terms of the course as a decoding hint | done — measured once, see below |
 | M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |

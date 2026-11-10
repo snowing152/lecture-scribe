@@ -440,11 +440,15 @@ uv run pytest                # tests needing hardware or the model are skipped
 uv run pytest -m manual      # run those instead
 ```
 
+Every push to `main` and every pull request runs the first four of these on
+Linux and on Windows (`.github/workflows/ci.yml`). It checks the code, not
+the sound card or the model, so those still need a run by hand.
+
 One module per job. The two front ends, the command line and the window,
 hold no logic of their own:
 
 ```
-audio_capture.py   system audio -> WAV on disk, plus device discovery
+audio_capture.py   system audio -> WAV on disk, device discovery, the marks file
 transcribe.py      WAV -> list[Segment], plus model and GPU readiness
 format_text.py     segments -> transcript text (pure)
 config.py          config.toml -> frozen dataclasses
