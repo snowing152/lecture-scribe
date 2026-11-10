@@ -1173,24 +1173,24 @@ class _Window(QWidget):
         self._meter.reset()
         self._clock.setText(format_duration(existing.duration))
         self._levels.setText(f"{existing.size_bytes / 1_000_000:.1f} MB")
-        self._show_earlier_transcript(existing)
-        if marks:
-            self._say(
-                f"{self._status.text()} · {_plural(len(marks), 'mark')}", path=path
-            )
+        self._show_earlier_transcript(existing, marks=len(marks))
         self._refresh()
 
-    def _show_earlier_transcript(self, existing: ExistingRecording) -> None:
+    def _show_earlier_transcript(
+        self, existing: ExistingRecording, *, marks: int
+    ) -> None:
         """Show the transcript beside a recording, when one was made already.
 
         Args:
             existing: The recording that was just opened.
+            marks: How many marks were read for it, named on the status line.
         """
+        counted = f" · {_plural(marks, 'mark')}" if marks else ""
         transcript = earlier_transcript(existing.path)
         if transcript is None:
             self._transcript.clear()
             self._say(
-                f"{_short_path(existing.path)} · not transcribed yet",
+                f"{_short_path(existing.path)} · not transcribed yet{counted}",
                 path=existing.path,
             )
             return
@@ -1211,7 +1211,7 @@ class _Window(QWidget):
         )
         self._say(
             f"{_short_path(existing.path)} · showing the transcript made earlier, "
-            f"transcribing again {outcome}",
+            f"transcribing again {outcome}{counted}",
             path=existing.path,
         )
 

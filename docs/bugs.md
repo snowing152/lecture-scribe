@@ -6,7 +6,7 @@ date and commit. Do not delete it.
 
 ## Open
 
-None. The next one found gets id B-12.
+None. The next one found gets id B-18.
 
 ## Known limitations
 
@@ -28,6 +28,29 @@ Not bugs, but they can surprise you.
 ## Fixed
 
 Newest first. Commit hashes are on `main`.
+
+### 2026-11-10, "Fix what the review of the improvement plan found" (B-12 to B-17)
+
+Found by a cloud review of steps 1-7 before they reached `main`.
+
+- **B-12**: a failed load of a cached model told the user to delete the
+  weights folder, also for a local model directory (their only copy) and for
+  CUDA or compute-type errors that a download cannot fix. The advice is gone.
+- **B-13**: `model_status` can call a broken cache "on disk" (a lost blob
+  behind a snapshot link), and the offline-only load then failed where it
+  used to repair itself online. A failed offline load is now tried once more
+  online. `hub_cache_dir` also honours `HUGGINGFACE_HUB_CACHE`, in the order
+  huggingface_hub uses.
+- **B-14**: `scribe text <folder>` took a lecture still being recorded and
+  wrote a partial transcript, which then marked it as done for good. A WAV
+  written to within the last 30 seconds is skipped and named.
+- **B-15**: the folder search matched `*.wav` case-sensitively on Linux, so
+  `LECTURE.WAV` was never found and the run said nothing was left.
+- **B-16**: in a folder of several WAVs, the folder-named transcript of one
+  counted every one as done. Such a recording now counts as done only by a
+  transcript with its own name, so the batch reports the clash instead.
+- **B-17**: opening a recording with marks re-sent the status line without
+  its problem flag, so "cannot read the transcript" lost its colour.
 
 ### 2026-11-10, "Save marks beside the recording" (B-11)
 

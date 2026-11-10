@@ -464,3 +464,32 @@ def test_a_damaged_marks_file_leaves_the_open_recording_as_it_was(
     assert window._wav == kept
     assert window._marks == [3.0]
     assert "line 1" in window._status.text()
+
+
+def test_a_transcript_that_cannot_be_read_stays_a_problem_with_marks(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _window(tmp_path)
+    wav = _wav(tmp_path / "c" / "c.wav")
+    marks_path(wav).write_text("5.0\n", encoding="utf-8")
+    transcript = wav.parent / "c.txt"
+    transcript.write_text("text", encoding="utf-8")
+    real_read = Path.read_text
+
+    def refuse(path: Path, *args: object, **kwargs: object) -> str:
+        if path == transcript:
+            raise PermissionError(13, "Permission denied")
+        return real_read(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *_a, **_k: (str(wav), "")
+    )
+
+    window._open_recording()
+
+    assert window._status.property("problem") is True
+    assert "cannot read" in window._status.text()

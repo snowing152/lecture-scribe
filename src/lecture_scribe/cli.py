@@ -354,9 +354,11 @@ def _text(config: Config, wavs: list[Path]) -> int:
             candidates.append(given)
             continue
         searched = True
-        found = pending_recordings(given)
-        print(f"{given}: {len(found)} recording(s) without a transcript")
-        candidates.extend(found)
+        pending = pending_recordings(given)
+        print(f"{given}: {len(pending.ready)} recording(s) without a transcript")
+        for wav in pending.busy:
+            print(f"  skipped {wav}: written to moments ago, still being recorded?")
+        candidates.extend(pending.ready)
 
     # A file named twice, by overlapping globs say, is one recording rather
     # than two that clash, so it is transcribed once under its first spelling.

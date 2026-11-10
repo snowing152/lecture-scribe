@@ -280,6 +280,8 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   `local_files_only=True`, `WhisperModel` calls `snapshot_download` even with
   the weights on disk. Measured here: one connection to port 443 per load,
   none once `load_model` passes `local_files_only` for a cached model.
+  `model_status` is looser than huggingface_hub's own check, so a failed
+  offline load is tried once more online, as every load used to be.
 - **The CUDA wheels are not on the loader's path.** They unpack into
   `site-packages/nvidia/*/lib`, where a bare `dlopen` never looks, so
   `transcribe._preload_cuda_libraries` loads them by full path first. Two
@@ -307,6 +309,6 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | R | window refresh: filled rounded surfaces, state chip, signal colours, readable transcript pane | done — verified live on Linux; not yet looked at on Windows |
 | K | language choice: Korean / English in the window, `scribe text --language` | done — checked by hand on Linux; not yet looked at on Windows |
 | C | `.github/workflows/ci.yml`: format, lint, mypy and tests on Linux and Windows | written, **not yet run on GitHub** |
-| F | `scribe text <folder>`: every recording under it without a transcript | done |
+| F | `scribe text <folder>`: every recording under it without a transcript, any case of `.wav`, skipping one written to in the last 30 s | done |
 | H | `asr.hotwords` / `scribe text --hotwords`: terms of the course as a decoding hint | done — measured once, see below |
 | M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |
