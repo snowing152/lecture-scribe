@@ -37,7 +37,7 @@ Newest first. Commit hashes are on `main`.
   replaced the old one without any `>>>`. Marks are now appended to
   `<recording>.marks` as they are pressed and read by both front ends (D-24).
   Marks from earlier sessions cannot be recovered; none of the 20 existing
-  transcripts has one. Commit: see the log.
+  transcripts has one. Commit: `090a31a`.
 
 ### 2026-11-10, "Wrap transcripts by screen columns" (B-10)
 
