@@ -170,3 +170,19 @@ holds). Speaker diarization, translation and summarisation may be added
 machine.
 **Still rejected:** cloud ASR, upload, telemetry; real time replacing batch;
 any of these as a new dependency without asking first (D-22).
+
+### D-24 · 2026-11-10 · active: Marks are saved in a file beside the recording
+
+A mark used to live only in the window's memory, so closing the window, or
+transcribing the recording again, lost it. Each mark is now appended to
+`<recording>.marks` when pressed, and both front ends read it.
+- **File:** the WAV's own name with `.marks`, so the pair survives a renamed
+  folder. Plain text, one offset in seconds per line, editable by hand.
+- **Code:** `audio_capture.py`, since marks belong to the recording and
+  recording must work without the model (D-2).
+- **A line that is not a non-negative number is an error**, as an unknown
+  config key is (D-8): a mark that silently went missing leaves nothing in
+  the transcript to show it.
+- **Append only:** the file is never deleted or rewritten automatically (D-7).
+**Not done:** pressing marks from `scribe rec`; it needs raw keyboard reading
+in a terminal on two platforms. A line can be added by hand.

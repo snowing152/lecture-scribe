@@ -165,7 +165,7 @@ and open a new window.
    meter shows the sound level.
 4. Press **mark** (<kbd>Ctrl</kbd>+<kbd>M</kbd>) whenever something is worth
    finding again, such as "this will be on the exam". Marked paragraphs show
-   in amber.
+   in amber. Each mark is saved beside the recording as you press it.
 5. Press **stop** when the lecture ends.
 6. Check **Language**: Korean, or English for a lecture given in English.
    It only matters for the next step, so you can change it after recording.
@@ -178,7 +178,7 @@ and open a new window.
 | **record** / **stop** | | start and finish a recording |
 | **mark** | <kbd>Ctrl</kbd>+<kbd>M</kbd> | flag this moment; the paragraph gets `>>>` in the file |
 | **transcribe** | | turn the recording into text; becomes **stop** while it runs |
-| **open** | <kbd>Ctrl</kbd>+<kbd>O</kbd> | pick an earlier recording, or any WAV file |
+| **open** | <kbd>Ctrl</kbd>+<kbd>O</kbd> | pick an earlier recording, or any WAV file; its marks come with it |
 
 Good to know:
 
@@ -210,8 +210,9 @@ folder (`C:\Users\<you>\lectures` on Windows, `~/lectures` on Linux):
 
 ```
 lectures/2026-09-09_os/
-├── 2026-09-09_os.wav   the recording, never deleted by the app
-└── 2026-09-09_os.txt   the transcript
+├── 2026-09-09_os.wav     the recording, never deleted by the app
+├── 2026-09-09_os.marks   the moments you marked, if any
+└── 2026-09-09_os.txt     the transcript
 ```
 
 The transcript looks like this:
@@ -225,7 +226,10 @@ The transcript looks like this:
 
 - `[00:47]` is where the paragraph starts in the lecture. Past one hour it
   becomes `[1:02:30]`.
-- `>>>` marks a moment you flagged with **mark**.
+- `>>>` marks a moment you flagged with **mark**. The marks are kept in the
+  `.marks` file next to the recording, one offset in seconds per line, so
+  transcribing again, in the window or with `scribe text`, keeps them. You can
+  add a line by hand.
 - **Rename the folder** to the lecture's title before transcribing, and the
   transcript gets that name too.
 - A second lecture of the same course on the same day goes into
@@ -399,8 +403,9 @@ scribe text --language en lecture.wav       # a lecture given in English
 ```
 
 <kbd>Ctrl</kbd>+<kbd>C</kbd> during `text` stops at the end of the current
-segment and writes nothing; a second press quits at once. Marks only exist in
-the window.
+segment and writes nothing; a second press quits at once. `text` reads the
+marks file beside each recording; marks can only be pressed in the window, but
+a line added to the file by hand counts.
 
 </details>
 
@@ -460,6 +465,7 @@ reason, and [`docs/bugs.md`](./docs/bugs.md) lists open and fixed bugs.
 | A | `keep_awake.py`: no lock or sleep while recording or transcribing | done |
 | R | window refresh: rounded surfaces, state chip, signal colours | done |
 | K | language choice: Korean or English, never automatic | done |
+| M | marks saved beside the recording | done |
 
 </details>
 

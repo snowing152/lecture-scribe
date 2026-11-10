@@ -21,6 +21,7 @@ from lecture_scribe.audio_capture import (
     lecture_dir,
     list_loopback_devices,
     loudness,
+    read_marks,
     record_loopback,
     recording_path,
     remove_if_empty,
@@ -339,8 +340,15 @@ def _text(config: Config, wavs: list[Path]) -> int:
             continue
         try:
             inspect_recording(wav)
+            # Read here as well as where it is used, so a damaged marks file
+            # fails in an instant rather than after the model has loaded.
+            read_marks(wav)
         except AudioDeviceError as error:
             print(f"error: {error}", file=sys.stderr)
+            failures += 1
+            continue
+        except (ValueError, OSError) as error:
+            print(f"error: {wav}: {error}", file=sys.stderr)
             failures += 1
             continue
         readable.append(wav)
@@ -445,6 +453,14 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
             print(f"  {result.interrupted}.", file=sys.stderr)
             return 1
 
+        try:
+            marks = read_marks(wav)
+        except (ValueError, OSError) as error:
+            # Checked before the model loaded, so this is a file that changed
+            # in between. Writing without its marks would drop them silently.
+            print(f"  error: {error}", file=sys.stderr)
+            failures += 1
+            continue
         text = render_transcript(
             result.segments,
             title=wav.parent.name,
@@ -454,6 +470,7 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
             paragraph_gap=config.output.paragraph_gap,
             paragraph_target=config.output.paragraph_target,
             paragraph_max=config.output.paragraph_max,
+            marks=marks,
         )
         text_path = transcript_path(wav)
         try:
@@ -466,6 +483,8 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
             return 1
 
         _row("segments", str(len(result.segments)))
+        if marks:
+            _row("marks", str(len(marks)))
         _row("audio", format_duration(result.audio_duration))
         _row(
             "decoding",

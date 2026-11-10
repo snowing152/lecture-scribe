@@ -450,6 +450,79 @@ def remove_if_empty(folder: Path) -> bool:
     return True
 
 
+def marks_path(wav: Path) -> Path:
+    """Locate the file holding the marks pressed during a recording.
+
+    Tied to the WAV rather than to its folder, so the two stay a pair when
+    the folder is renamed.
+
+    Args:
+        wav: The recording.
+
+    Returns:
+        The WAV's own name with ``.marks``, whether or not it exists.
+    """
+    return wav.with_suffix(".marks")
+
+
+def append_mark(wav: Path, seconds: float) -> None:
+    """Record that a moment of the lecture was flagged.
+
+    Written the moment the key is pressed, appending a line at a time, so a
+    mark survives the window being closed and is never rewritten.
+
+    Args:
+        wav: The recording being made.
+        seconds: Offset into the recording.
+
+    Raises:
+        OSError: The file could not be written.
+    """
+    with marks_path(wav).open("a", encoding="utf-8") as handle:
+        handle.write(f"{seconds:.1f}\n")
+
+
+def read_marks(wav: Path) -> list[float]:
+    """Read back the marks pressed during a recording.
+
+    The file is plain text, one offset in seconds per line, and can be edited
+    by hand. A line that is not a number is an error rather than skipped: a
+    mark that silently went missing leaves nothing in the transcript to show
+    it.
+
+    Args:
+        wav: The recording.
+
+    Returns:
+        The offsets in file order; empty when there is no marks file.
+
+    Raises:
+        ValueError: A line is not a non-negative number, named with its
+            number in the file.
+        OSError: The file exists but could not be read.
+    """
+    path = marks_path(wav)
+    if not path.is_file():
+        return []
+
+    marks: list[float] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            seconds = float(text)
+        except ValueError:
+            seconds = -1.0
+        # nan fails the comparison, so it is refused along with the negatives.
+        if not seconds >= 0.0 or math.isinf(seconds):
+            raise ValueError(
+                f"{path.name} line {number}: '{text}' is not an offset in seconds"
+            )
+        marks.append(seconds)
+    return marks
+
+
 def recording_path(folder: Path) -> Path:
     """Name the recording after the lecture folder it goes into.
 

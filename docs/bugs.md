@@ -6,7 +6,7 @@ date and commit. Do not delete it.
 
 ## Open
 
-None. The next one found gets id B-11.
+None. The next one found gets id B-12.
 
 ## Known limitations
 
@@ -28,6 +28,16 @@ Not bugs, but they can surprise you.
 ## Fixed
 
 Newest first. Commit hashes are on `main`.
+
+### 2026-11-10, "Save marks beside the recording" (B-11)
+
+- **B-11**: marks lived only in the window's memory. Closing the window
+  before transcribing, or opening the recording later to transcribe it again,
+  lost them, and `scribe text` never knew of them, so the new transcript
+  replaced the old one without any `>>>`. Marks are now appended to
+  `<recording>.marks` as they are pressed and read by both front ends (D-24).
+  Marks from earlier sessions cannot be recovered; none of the 20 existing
+  transcripts has one. Commit: see the log.
 
 ### 2026-11-10, "Wrap transcripts by screen columns" (B-10)
 

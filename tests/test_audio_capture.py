@@ -15,11 +15,14 @@ from lecture_scribe.audio_capture import (
     AudioDeviceError,
     LoopbackDevice,
     Recording,
+    append_mark,
     course_slug,
     dbfs,
     inspect_recording,
     lecture_dir,
     loudness,
+    marks_path,
+    read_marks,
     recording_path,
     remove_if_empty,
     resolve_device,
@@ -396,3 +399,38 @@ def test_loudness_clamps_below_the_floor() -> None:
 def test_loudness_clamps_above_full_scale() -> None:
     # A block that clipped should pin the meter rather than overrun it.
     assert loudness(2.5) == 1.0
+
+
+def test_marks_live_beside_the_recording_under_its_name(tmp_path: Path) -> None:
+    assert marks_path(tmp_path / "x" / "x.wav") == tmp_path / "x" / "x.marks"
+
+
+def test_marks_come_back_as_they_were_written(tmp_path: Path) -> None:
+    wav = tmp_path / "lecture.wav"
+
+    append_mark(wav, 12.34)
+    append_mark(wav, 754.3)
+
+    assert read_marks(wav) == [12.3, 754.3]
+
+
+def test_a_recording_with_no_marks_file_has_no_marks(tmp_path: Path) -> None:
+    assert read_marks(tmp_path / "lecture.wav") == []
+
+
+def test_blank_lines_in_the_marks_file_are_skipped(tmp_path: Path) -> None:
+    wav = tmp_path / "lecture.wav"
+    marks_path(wav).write_text("1.0\n\n  \n2.5\n", encoding="utf-8")
+
+    assert read_marks(wav) == [1.0, 2.5]
+
+
+@pytest.mark.parametrize("bad", ["soon", "-3", "nan", "inf"])
+def test_a_line_that_is_not_an_offset_is_refused_with_its_number(
+    tmp_path: Path, bad: str
+) -> None:
+    wav = tmp_path / "lecture.wav"
+    marks_path(wav).write_text(f"1.0\n{bad}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="line 2"):
+        read_marks(wav)
