@@ -37,7 +37,7 @@ Newest first. Commit hashes are on `main`.
   `socket.connect` calls during a load of the cached large-v3: one to port
   443 before, none after. `load_model` now passes `local_files_only` when
   `model_status` finds the weights, and a cached model that will not load
-  says its folder may be incomplete. Commit: see the log.
+  says its folder may be incomplete. Commit: `e5ef79b`.
 
 ### 2026-11-09, "Fix what the third review found" (B-1 to B-6)
 
