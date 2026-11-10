@@ -5,11 +5,11 @@ that string and reads it back, and never touches the disk.
 """
 
 import re
-import textwrap
 from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import pairwise
+from unicodedata import east_asian_width
 
 from lecture_scribe.transcribe import Segment
 
@@ -281,11 +281,59 @@ def _render_paragraph(paragraph: _Paragraph, *, marked: bool, with_hour: bool) -
     """Wrap one paragraph, adding its timecode and marker prefix."""
     lead = _MARKER if marked else ""
     prefix = f"{lead}{format_timecode(paragraph.start, with_hour=with_hour)} "
-    return textwrap.fill(
-        paragraph.text,
-        width=_LINE_WIDTH,
-        initial_indent=prefix,
-        subsequent_indent=" " * len(prefix),
-        break_long_words=False,
-        break_on_hyphens=False,
-    )
+    return _wrap(paragraph.text, prefix=prefix, width=_LINE_WIDTH)
+
+
+def _columns(text: str) -> int:
+    """Count the terminal columns a string takes up.
+
+    A Korean syllable is two columns wide where a Latin letter is one, so
+    ``len`` undercounts: lines of 80 characters measured 107 to 135 columns
+    on a real lecture.
+
+    Args:
+        text: Any string.
+
+    Returns:
+        Its width, counting wide and fullwidth characters twice.
+    """
+    return sum(2 if east_asian_width(char) in ("W", "F") else 1 for char in text)
+
+
+def _wrap(text: str, *, prefix: str, width: int) -> str:
+    """Fill text into lines of at most ``width`` columns.
+
+    ``textwrap`` measures in characters and has no hook for anything else,
+    hence this greedy wrap at spaces. A word wider than a line is kept whole,
+    as ``textwrap`` does with ``break_long_words=False``.
+
+    Args:
+        text: The paragraph, words separated by whitespace.
+        prefix: Opens the first line; later lines are indented to match it.
+        width: The widest a line may be, prefix included, in columns.
+
+    Returns:
+        The wrapped lines joined by newlines, or an empty string when the
+        text holds no words.
+    """
+    words = text.split()
+    if not words:
+        return ""
+    indent = " " * len(prefix)
+    lines: list[str] = []
+    line = prefix
+    used = len(prefix)
+    fresh = True
+    for word in words:
+        needed = _columns(word)
+        if not fresh and used + 1 + needed > width:
+            lines.append(line)
+            line, used, fresh = indent, len(indent), True
+        if not fresh:
+            line += " "
+            used += 1
+        line += word
+        used += needed
+        fresh = False
+    lines.append(line)
+    return "\n".join(lines)
