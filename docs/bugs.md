@@ -37,7 +37,7 @@ Newest first. Commit hashes are on `main`.
   English text wraps byte for byte as before. Re-wrapping two real Korean
   transcripts: widest line 137 -> 80 columns, 280 -> 434 and 144 -> 234
   lines. Transcripts already on disk change only when recognised again.
-  Commit: see the log.
+  Commit: `8f3e777`.
 
 ### 2026-11-10, "Take back the folder of a failed start" (B-8, B-9)
 
