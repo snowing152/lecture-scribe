@@ -71,6 +71,8 @@ House rules:
 - Tests cover pure logic. Anything needing a sound card or the downloaded
   model is marked `@pytest.mark.manual`.
 - One change per pull request, and say how you checked it by hand.
+- A pull request is checked automatically on Linux and on Windows (format,
+  lint, `mypy`, tests). It cannot check audio or the model, so say how you did.
 
 ## Conduct
 
