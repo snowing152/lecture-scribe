@@ -1,6 +1,7 @@
 """Tests for the parts of transcribe.py that do not need a real model."""
 
 import errno
+import os
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -154,25 +155,34 @@ def test_local_model_directory_is_read_directly(tmp_path: Path) -> None:
 
 
 class _FakeWhisperModel:
-    """Stand-in for faster_whisper.WhisperModel that keeps its arguments."""
+    """Stand-in for faster_whisper.WhisperModel that keeps every call.
 
-    seen: ClassVar[dict[str, object]] = {}
-    failure: ClassVar[Exception | None] = None
+    ``failures`` maps a value of ``local_files_only`` to the error a load in
+    that mode raises, so an offline load can fail while an online one works.
+    """
+
+    calls: ClassVar[list[dict[str, object]]] = []
+    failures: ClassVar[dict[bool, Exception]] = {}
 
     def __init__(self, name: str, **kwargs: object) -> None:
-        if _FakeWhisperModel.failure is not None:
-            raise _FakeWhisperModel.failure
-        _FakeWhisperModel.seen = {"name": name, **kwargs}
+        _FakeWhisperModel.calls.append({"name": name, **kwargs})
+        failure = _FakeWhisperModel.failures.get(bool(kwargs["local_files_only"]))
+        if failure is not None:
+            raise failure
 
 
 def _fake_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
-    _FakeWhisperModel.seen = {}
-    _FakeWhisperModel.failure = None
+    _FakeWhisperModel.calls = []
+    _FakeWhisperModel.failures = {}
     monkeypatch.setattr(
         transcribe_module,
         "_import_faster_whisper",
         lambda: SimpleNamespace(WhisperModel=_FakeWhisperModel),
     )
+
+
+def _offline_modes() -> list[object]:
+    return [call["local_files_only"] for call in _FakeWhisperModel.calls]
 
 
 def _cache_model(root: Path) -> Path:
@@ -191,7 +201,7 @@ def test_a_cached_model_is_loaded_without_the_network(
 
     load_model("large-v3", gpu=False)
 
-    assert _FakeWhisperModel.seen["local_files_only"] is True
+    assert _offline_modes() == [True]
 
 
 def test_a_model_not_on_disk_is_allowed_to_download(
@@ -202,35 +212,79 @@ def test_a_model_not_on_disk_is_allowed_to_download(
 
     load_model("large-v3", gpu=False)
 
-    assert _FakeWhisperModel.seen["local_files_only"] is False
+    assert _offline_modes() == [False]
 
 
-def test_a_cached_model_that_will_not_load_suggests_downloading_again(
+def test_a_cache_that_fails_offline_is_repaired_online(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
-    folder = _cache_model(tmp_path)
+    _cache_model(tmp_path)
     _fake_faster_whisper(monkeypatch)
-    _FakeWhisperModel.failure = OSError("truncated")
+    # What huggingface_hub raises when a snapshot link points at a lost blob.
+    _FakeWhisperModel.failures = {True: FileNotFoundError("blob gone")}
 
-    with pytest.raises(TranscriptionError) as caught:
+    load_model("large-v3", gpu=False)
+
+    assert _offline_modes() == [True, False]
+
+
+def test_a_load_that_fails_both_ways_reports_the_online_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _cache_model(tmp_path)
+    _fake_faster_whisper(monkeypatch)
+    _FakeWhisperModel.failures = {
+        True: FileNotFoundError("blob gone"),
+        False: ValueError("unsupported compute type"),
+    }
+
+    with pytest.raises(TranscriptionError, match="unsupported compute type"):
         load_model("large-v3", gpu=False)
 
-    assert str(folder) in str(caught.value)
-    assert "incomplete" in str(caught.value)
+
+def test_a_failure_never_advises_deleting_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A local model directory is the user's own copy, not a cache.
+    (tmp_path / "model.bin").touch()
+    _fake_faster_whisper(monkeypatch)
+    _FakeWhisperModel.failures = {
+        True: RuntimeError("no CUDA"),
+        False: RuntimeError("no CUDA"),
+    }
+
+    with pytest.raises(TranscriptionError) as caught:
+        load_model(str(tmp_path), gpu=False)
+
+    assert "delete" not in str(caught.value)
 
 
-def test_a_failed_download_does_not_blame_the_cache(
+def test_a_model_not_on_disk_is_tried_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
     _fake_faster_whisper(monkeypatch)
-    _FakeWhisperModel.failure = OSError("offline")
+    _FakeWhisperModel.failures = {False: OSError("offline")}
 
-    with pytest.raises(TranscriptionError) as caught:
+    with pytest.raises(TranscriptionError, match="offline"):
         load_model("large-v3", gpu=False)
 
-    assert "incomplete" not in str(caught.value)
+    assert _offline_modes() == [False]
+
+
+def test_the_legacy_cache_variable_is_honoured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", "/legacy")
+    monkeypatch.setenv("HF_HOME", "/hf-home")
+
+    assert hub_cache_dir() == Path("/legacy")
+
+    monkeypatch.setenv("HF_HUB_CACHE", "/exact")
+    assert hub_cache_dir() == Path("/exact")
 
 
 def test_hub_cache_dir_prefers_the_most_specific_variable(
@@ -614,10 +668,19 @@ def test_a_failed_write_leaves_the_earlier_transcript_whole(
     assert list(tmp_path.iterdir()) == [target]
 
 
-def _wav(path: Path) -> Path:
+_LONG_AGO = 1_000_000_000.0
+"""A moment far past any recording made in a test."""
+
+
+def _wav(path: Path, *, written: float = _LONG_AGO) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch()
+    os.utime(path, (written, written))
     return path
+
+
+def _ready(folder: Path) -> list[Path]:
+    return pending_recordings(folder, now=_LONG_AGO + 3600.0).ready
 
 
 def test_pending_recordings_finds_the_ones_without_a_transcript(
@@ -627,7 +690,7 @@ def test_pending_recordings_finds_the_ones_without_a_transcript(
     (done.parent / "2026-10-28_a.txt").touch()
     todo = _wav(tmp_path / "CN" / "2026-11-02_b" / "2026-11-02_b.wav")
 
-    assert pending_recordings(tmp_path) == [todo]
+    assert _ready(tmp_path) == [todo]
 
 
 def test_a_transcript_under_an_older_name_counts_as_done(tmp_path: Path) -> None:
@@ -636,11 +699,39 @@ def test_a_transcript_under_an_older_name_counts_as_done(tmp_path: Path) -> None
     old = _wav(tmp_path / "older" / "audio.wav")
     (old.parent / "transcript.txt").touch()
 
-    assert pending_recordings(tmp_path) == []
+    assert _ready(tmp_path) == []
 
 
 def test_pending_recordings_come_back_in_path_order(tmp_path: Path) -> None:
     second = _wav(tmp_path / "b" / "b.wav")
     first = _wav(tmp_path / "a" / "a.wav")
 
-    assert pending_recordings(tmp_path) == [first, second]
+    assert _ready(tmp_path) == [first, second]
+
+
+def test_an_upper_case_extension_is_found(tmp_path: Path) -> None:
+    shouted = _wav(tmp_path / "phone" / "LECTURE.WAV")
+
+    assert _ready(tmp_path) == [shouted]
+
+
+def test_a_recording_still_being_written_is_held_back(tmp_path: Path) -> None:
+    live = _wav(tmp_path / "live" / "live.wav", written=_LONG_AGO)
+    finished = _wav(tmp_path / "old" / "old.wav", written=_LONG_AGO - 3600.0)
+
+    pending = pending_recordings(tmp_path, now=_LONG_AGO + 5.0)
+
+    assert pending.ready == [finished]
+    assert pending.busy == [live]
+
+
+def test_a_folder_transcript_does_not_cover_a_second_recording(
+    tmp_path: Path,
+) -> None:
+    first = _wav(tmp_path / "Downloads" / "a.wav")
+    second = _wav(tmp_path / "Downloads" / "b.wav")
+    (first.parent / "Downloads.txt").touch()
+
+    # Neither owns the folder's transcript, so both are handed on, where the
+    # check for a shared transcript says what to do about them.
+    assert _ready(tmp_path) == [first, second]

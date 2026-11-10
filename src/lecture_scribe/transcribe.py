@@ -9,6 +9,7 @@ import ctypes
 import os
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
@@ -25,6 +26,15 @@ _CUDA_PACKAGES = ("nvidia.cublas", "nvidia.cuda_nvrtc")
 # The one CUDA library this CTranslate2 build reaches for. It carries no
 # cuDNN reference at all, whatever the faster-whisper documentation says.
 _CUBLAS_LIBRARY = "cublas64_12.dll" if os.name == "nt" else "libcublas.so.12"
+
+
+_STILL_WRITING_SECONDS = 30.0
+"""How recently a WAV must have been written to count as still recording.
+
+A recording writes a block every 64 ms, so a live one is never more than a
+fraction of a second old; a recording killed outright stops being written
+and is picked up half a minute later.
+"""
 
 
 class TranscriptionError(Exception):
@@ -199,9 +209,13 @@ def hub_cache_dir() -> Path:
         The directory downloaded models are stored in, whether or not it
         exists yet.
     """
-    hub = os.environ.get("HF_HUB_CACHE")
-    if hub:
-        return Path(hub)
+    # The order huggingface_hub itself uses, legacy variable included: a
+    # cache it would read from elsewhere would make the offline load in
+    # `load_model` look for weights in the wrong place.
+    for variable in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        hub = os.environ.get(variable)
+        if hub:
+            return Path(hub).expanduser()
     home = os.environ.get("HF_HOME")
     if home:
         return Path(home) / "hub"
@@ -283,10 +297,12 @@ def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped librar
     Returns:
         A ``faster_whisper.WhisperModel`` ready to transcribe.
 
-    Weights already on disk are loaded without touching the network. A
-    model name that :func:`model_status` cannot find in the cache, such as an
-    unusual one, is still handed to faster-whisper as before, which may ask
-    the hub.
+    Weights already on disk are loaded without touching the network. The
+    check for them is looser than huggingface_hub's own -- a deleted blob
+    behind a snapshot link still counts as on disk -- so an offline load that
+    fails is tried once more online, which is what every load did before and
+    which repairs such a cache. A model name :func:`model_status` cannot find
+    in the cache, such as an unusual one, goes online from the start.
 
     Raises:
         TranscriptionError: The weights could not be read or downloaded, or
@@ -298,27 +314,32 @@ def load_model(model: str, *, gpu: bool) -> Any:  # noqa: ANN401 (untyped librar
     device = "cuda" if gpu else "cpu"
     if gpu:
         _preload_cuda_libraries()
-    status = model_status(model)
-    try:
-        # Without this faster-whisper checks the hub on every load, even with
-        # the weights on disk, which breaks the promise that nothing leaves
-        # the machine after the first download.
+
+    def build(*, offline: bool) -> Any:  # noqa: ANN401 (untyped library)
         return faster_whisper.WhisperModel(
             model,
             device=device,
             compute_type=compute_type(gpu),
-            local_files_only=status.cached,
+            local_files_only=offline,
         )
+
+    # Without this faster-whisper checks the hub on every load, even with the
+    # weights on disk, which breaks the promise that nothing leaves the
+    # machine after the first download. A local model directory is read
+    # directly either way, so it never reaches the hub.
+    offline = model_status(model).cached
+    try:
+        return build(offline=offline)
     except (OSError, ValueError, RuntimeError) as error:
-        advice = (
-            f". The weights in {status.location} may be incomplete: delete "
-            "that folder and run again to download them afresh"
-            if status.cached
-            else ""
-        )
-        raise TranscriptionError(
-            f"cannot load model '{model}': {error}{advice}"
-        ) from error
+        if not offline:
+            raise TranscriptionError(f"cannot load model '{model}': {error}") from error
+        first = error
+    try:
+        return build(offline=False)
+    except (OSError, ValueError, RuntimeError) as error:
+        # The online error names what is really wrong; the offline one is
+        # kept in the chain for anyone reading a traceback.
+        raise TranscriptionError(f"cannot load model '{model}': {error}") from first
 
 
 def check_language(model: Any, language: str) -> None:  # noqa: ANN401 (untyped library)
@@ -544,25 +565,62 @@ def earlier_transcript(wav: Path) -> Path | None:
     return next((path for path in candidates if path.is_file()), None)
 
 
-def pending_recordings(folder: Path) -> list[Path]:
+@dataclass(frozen=True, slots=True)
+class Pending:
+    """Recordings under a folder that have no transcript yet.
+
+    Attributes:
+        ready: Recordings that can be transcribed now, in path order.
+        busy: Recordings written to moments ago, almost certainly a lecture
+            still being recorded, left out so a half-finished one does not
+            get a transcript that then marks it as done for good.
+    """
+
+    ready: list[Path]
+    busy: list[Path]
+
+
+def pending_recordings(folder: Path, *, now: float | None = None) -> Pending:
     """Find the recordings under a folder that have no transcript yet.
 
     For catching up on an archive: a recording counts as done when
     :func:`earlier_transcript` finds a transcript for it under any of the
     names a transcript has had, so a lecture whose folder was renamed is not
-    recognised a second time.
+    recognised a second time. A recording that shares its folder with
+    another counts as done only by a transcript with its own name: the
+    folder-named one belongs to whichever was transcribed, not to both.
 
     Args:
         folder: Directory to search, however deeply the lectures are nested.
+            The extension is matched in any case, so ``LECTURE.WAV`` copied
+            from another machine is found on Linux too.
+        now: The time to judge "written to moments ago" by, as from
+            :func:`time.time`. Defaults to the present.
 
     Returns:
-        The ``.wav`` files without a transcript, in path order.
+        Recordings ready to transcribe, and those still being written.
     """
-    return [
-        wav
-        for wav in sorted(folder.rglob("*.wav"))
-        if wav.is_file() and earlier_transcript(wav) is None
-    ]
+    moment = time.time() if now is None else now
+    wavs = sorted(
+        path for path in folder.rglob("*.wav", case_sensitive=False) if path.is_file()
+    )
+    per_folder = Counter(wav.parent for wav in wavs)
+
+    ready: list[Path] = []
+    busy: list[Path] = []
+    for wav in wavs:
+        if per_folder[wav.parent] > 1:
+            done = wav.with_suffix(".txt").is_file()
+        else:
+            done = earlier_transcript(wav) is not None
+        if done:
+            continue
+        try:
+            age = moment - wav.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        (busy if age < _STILL_WRITING_SECONDS else ready).append(wav)
+    return Pending(ready=ready, busy=busy)
 
 
 def _cublas_available() -> bool:

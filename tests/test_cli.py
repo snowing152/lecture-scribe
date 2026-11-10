@@ -1,5 +1,6 @@
 """Tests for how the command line carries a batch through failures."""
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -213,6 +214,12 @@ def test_marks_reach_the_transcript_written_by_the_command_line(
     assert ">>> [00:10]" not in text
 
 
+def _settled(*wavs: Path) -> None:
+    """Age recordings past the window in which they count as still recording."""
+    for wav in wavs:
+        os.utime(wav, (1_000_000_000.0, 1_000_000_000.0))
+
+
 def test_a_folder_with_nothing_left_succeeds_without_loading_the_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -241,6 +248,7 @@ def test_a_folder_hands_on_only_the_recordings_without_a_transcript(
     todo = _lecture(tmp_path, "todo")
     for wav in (done, todo):
         sf.write(wav, np.zeros(1600, dtype=np.float32), 16000)
+    _settled(done, todo)
     (done.parent / "done.txt").write_text("done", encoding="utf-8")
     handed: list[list[Path]] = []
 
@@ -285,3 +293,22 @@ def test_a_missing_path_is_still_an_error_beside_a_folder(
 
     assert cli._text(Config(), [tmp_path, tmp_path / "nope.wav"]) == 1
     assert "does not exist" in capsys.readouterr().err
+
+
+def test_a_recording_in_progress_is_skipped_and_named(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    live = _lecture(tmp_path, "live")
+    sf.write(live, np.zeros(1600, dtype=np.float32), 16000)
+
+    def never(*_args: object, **_kwargs: object) -> int:
+        raise AssertionError("the model must not be loaded")
+
+    monkeypatch.setattr(cli, "_transcribe_all", never)
+
+    assert cli._text(Config(), [tmp_path]) == 0
+    out = capsys.readouterr().out
+    assert "skipped" in out
+    assert "live.wav" in out

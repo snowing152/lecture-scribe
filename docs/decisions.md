@@ -58,7 +58,7 @@ Unknown keys are an error. Since 2026-11-09, out-of-range values are too.
 **Why:** a typo should not silently fall back to a default. This is also why
 the menu entry pins `Path=` (D-14).
 
-### D-9 · 2026-09-10 · active, refined by D-21: Recognition settings
+### D-9 · 2026-09-10 · active, refined by D-21 and D-25: Recognition settings
 
 `vad_filter=True` with 500 ms silence, `condition_on_previous_text=False`,
 `int8_float16` on GPU and `int8` on CPU.

@@ -56,7 +56,7 @@ a timecode on every paragraph.
   even a crash keeps everything recorded so far. Recordings are never deleted
   or overwritten by the app.
 - **Works offline.** After a one-time model download, nothing leaves your
-  computer.
+  computer, and the model loads from disk without contacting the network.
 
 ## Install
 
@@ -412,7 +412,8 @@ computer. Record on a laptop and transcribe later on a faster machine.
 quickest way to catch up on a week of lectures:
 
 ```bash
-scribe text ~/lectures                      # only what has no transcript yet
+scribe text ~/lectures                      # only what has no transcript yet;
+                                            # a lecture still recording is skipped
 scribe text ~/lectures/*/*.wav              # or name the files, done or not
 scribe text --model large-v3 lecture.wav    # another model, without editing config.toml
 scribe text --language en lecture.wav       # a lecture given in English
