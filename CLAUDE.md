@@ -214,6 +214,15 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 - A `.lnk` is a binary format, so the Windows shortcut is written by
   PowerShell's `WScript.Shell` rather than by hand. That keeps a Start Menu
   entry from costing a dependency.
+- **Moving the checkout breaks the installed `scribe` and the menu entry,
+  silently.** The editable install is one line in
+  `_editable_impl_lecture_scribe.pth` naming the old `src`, so the tool
+  fails with `ModuleNotFoundError: No module named 'lecture_scribe'`; the
+  shortcut keeps the old folder as its working directory and icon path.
+  `scribe-gui.exe` has no console, so the window just never appears. Seen
+  on 2026-11-23 after a move from the Desktop to `D:\Projects`. Rerun
+  `uv tool install --editable ".[cuda]" --force` and `scribe launcher` from
+  the new folder.
 - **Noctalia serves `org.freedesktop.ScreenSaver` and obeys it.** Its log
   reads `idle behavior 'lock' suppressed (screensaver inhibit locks=1)`, and
   the same for `screen-off` and `suspend`. The idle config on this machine
