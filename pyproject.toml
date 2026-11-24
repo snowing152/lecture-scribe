@@ -12,6 +12,12 @@ dependencies = [
     "numpy>=2.0",
     "faster-whisper>=1.1",
     "pyside6-essentials>=6.8",
+    # Not a new dependency: faster-whisper already pulls av in to decode audio.
+    # faster-whisper 1.2.1 passes `metadata_errors` to `av.open()`, which
+    # PyAV 19 removed, so every recognition fails with a TypeError. Pinned
+    # here because `uv tool install` ignores uv.lock. Lift it once a
+    # faster-whisper release works with PyAV 19.
+    "av<19",
 ]
 
 # Only cuBLAS: this CTranslate2 build dlopens libcublas.so.12 and nothing

@@ -398,6 +398,7 @@ name = "lecture-scribe"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "av" },
     { name = "faster-whisper" },
     { name = "numpy" },
     { name = "pyside6-essentials" },
@@ -419,6 +420,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", specifier = "<19" },
     { name = "faster-whisper", specifier = ">=1.1" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "nvidia-cublas-cu12", marker = "extra == 'cuda'", specifier = ">=12.1" },
