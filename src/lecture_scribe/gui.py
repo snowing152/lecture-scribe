@@ -18,38 +18,59 @@ import math
 import sys
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
-from PySide6.QtCore import QMimeData, QPointF, QRectF, QSize, Qt, QThread, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QMimeData,
+    QParallelAnimationGroup,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QFont,
     QIcon,
     QKeySequence,
-    QLinearGradient,
     QPainter,
+    QPainterPath,
     QPaintEvent,
+    QPalette,
+    QPen,
     QPixmap,
     QPolygonF,
+    QResizeEvent,
     QShortcut,
-    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QBoxLayout,
+    QButtonGroup,
     QComboBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
     QStyle,
     QStyleOptionComboBox,
     QStylePainter,
@@ -115,6 +136,16 @@ Japanese, and a Korean lecture recognised as English comes out as a loose
 English translation. Any other code still works from ``config.toml``.
 """
 
+_BOARD = 0
+_READER = 1
+"""Pages of the area under the recorder: the queue, or one transcript."""
+
+_STACK_BELOW = 900
+"""Window width under which the queue's three columns stack."""
+
+_UNLIMITED = 16777215
+"""Qt's QWIDGETSIZE_MAX: no maximum height."""
+
 _GLYPH = 10
 """Side of a button's painted icon, in logical pixels."""
 _GLYPH_GAP = 6
@@ -140,50 +171,75 @@ _MONO_FAMILIES = (
     "monospace",
 )
 
-# Three stacked surfaces instead of outlines: depth comes from how light a
-# panel is, so borders are left for focus and for what is switched off. The
-# greys lean faintly cool, which keeps them from reading as unconsidered.
-_BG = "#0f0f11"
-_SURFACE = "#18181b"
-_RAISED = "#232327"
-_HOVER = "#2d2d32"
-_LINE = "#2a2a2f"
-_FOCUS = "#55555e"
-_TEXT = "#ececee"
-_MUTED = "#8c8c94"
-_FAINT = "#5a5a62"
-# Colour is kept for meaning, never decoration: red for capturing audio,
-# amber for a mark, and a lighter red for anything that needs attention.
-_LIVE = "#ff5a4f"
-_MARK = "#f5b83d"
-_MARK_WASH = "#272012"
-"""A marked paragraph's background: amber, faint enough to read through."""
-_PROBLEM = "#ff8a80"
+# Warm greys after Monokai Pro, three surfaces deep: depth comes from how
+# light a panel is, so borders are left for focus and for cards.
+_BG = "#221f22"
+_SURFACE = "#2d2a2e"
+_RAISED = "#363337"
+_HOVER = "#403e41"
+_LINE = "#403e41"
+_DASH = "#5b595c"
+_TEXT = "#fcfcfa"
+# Lighter than Monokai's own #939293, which falls under 4.5:1 on the cards.
+_MUTED = "#c1c0c0"
+_FAINT = "#727072"
+# Each colour has one meaning (D-30): yellow is what can be pressed or is in
+# progress, pink-red a recording that is live, orange a mark, green done.
+_ACCENT = "#ffd866"
+_ACCENT_HOVER = "#ffe599"
+_INK = "#221f22"
+"""Text on yellow and on pink-red, which white would fail on."""
+_LIVE = "#ff6188"
+_MARK = "#fc9867"
+_MARK_WASH = "#3b2d27"
+"""A marked paragraph's background: orange, faint enough to read through."""
+_DONE = "#a9dc76"
+_PROBLEM = "#ff8aa6"
 
 _STYLESHEET = f"""
-QWidget {{ background: {_BG}; color: {_TEXT}; }}
+QWidget {{ color: {_TEXT}; }}
+QWidget#window {{ background: {_BG}; }}
 QLabel {{ background: transparent; }}
-QLabel#caption {{ color: {_FAINT}; }}
+QLabel#caption {{ color: {_MUTED}; }}
+QLabel#sub {{ color: {_MUTED}; }}
 QLabel#title {{ color: {_TEXT}; }}
 QLabel#clock {{ color: {_TEXT}; }}
-QLabel#levels {{ color: {_MUTED}; }}
 QLabel#status {{ color: {_MUTED}; }}
 QLabel#status[problem="true"] {{ color: {_PROBLEM}; }}
+QLabel#badge {{
+    background: {_HOVER}; border-radius: 9px; padding: 1px 8px; color: {_TEXT};
+}}
+QLabel#empty {{
+    border: 1px dashed {_DASH}; border-radius: 12px; padding: 16px; color: {_MUTED};
+}}
+QLabel#cardtitle {{ color: {_TEXT}; }}
+
+QFrame#bar, QFrame#column {{ background: {_SURFACE}; border-radius: 16px; }}
+QFrame#strip {{
+    background: {_SURFACE}; border: 1px solid {_LINE}; border-radius: 20px;
+}}
+QFrame#card {{
+    background: {_RAISED}; border: 1px solid {_LINE}; border-radius: 12px;
+}}
+QFrame#card[live="true"] {{ border-color: rgba(255, 216, 102, 140); }}
+QFrame#card[problem="true"] {{ border-color: {_LIVE}; }}
+QFrame#pills {{
+    background: {_RAISED}; border: 1px solid {_LINE}; border-radius: 16px;
+}}
 
 QLineEdit, QComboBox {{
-    background: {_SURFACE};
-    border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 8px 12px;
-    selection-background-color: {_HOVER};
-    selection-color: {_TEXT};
+    background: {_RAISED};
+    border: 1px solid {_LINE};
+    border-radius: 15px;
+    padding: 6px 12px;
+    selection-background-color: {_ACCENT};
+    selection-color: {_INK};
 }}
-QLineEdit:hover, QComboBox:hover {{ border-color: {_LINE}; }}
-QLineEdit:focus, QComboBox:focus {{ border-color: {_FOCUS}; }}
+QLineEdit:focus, QComboBox:focus {{ border-color: {_ACCENT}; }}
 QLineEdit:disabled, QComboBox:disabled {{
-    color: {_FAINT}; background: transparent; border-color: {_LINE};
+    color: {_FAINT}; background: transparent;
 }}
-QComboBox::drop-down {{ border: none; width: 30px; }}
+QComboBox::drop-down {{ border: none; width: 28px; }}
 QComboBox QAbstractItemView {{
     background: {_RAISED};
     border: 1px solid {_LINE};
@@ -194,48 +250,62 @@ QComboBox QAbstractItemView {{
 
 QPushButton {{
     background: {_RAISED};
-    border: 1px solid transparent;
-    border-radius: 16px;
-    padding: 8px 20px;
+    border: 1px solid {_LINE};
+    border-radius: 15px;
+    padding: 6px 14px;
     color: {_TEXT};
     font-weight: 500;
 }}
 QPushButton:hover {{ background: {_HOVER}; }}
-QPushButton:pressed {{ background: {_SURFACE}; }}
-QPushButton:focus {{ border-color: {_FOCUS}; }}
+QPushButton:focus {{ border-color: {_ACCENT}; }}
 QPushButton:disabled {{
     background: transparent; border-color: {_LINE}; color: {_FAINT};
 }}
-QPushButton#primary {{ background: {_TEXT}; color: {_BG}; }}
-QPushButton#primary:hover {{ background: #ffffff; }}
-QPushButton#primary:pressed {{ background: #c8c8cc; }}
-QPushButton#primary:focus {{ border-color: {_MUTED}; }}
-QPushButton#primary:disabled {{
+QPushButton#accent {{ background: {_ACCENT}; border-color: {_ACCENT}; color: {_INK}; }}
+QPushButton#accent:hover {{ background: {_ACCENT_HOVER}; }}
+QPushButton#accent:disabled {{
     background: transparent; border-color: {_LINE}; color: {_FAINT};
 }}
-QPushButton#primary[live="true"] {{ background: {_LIVE}; color: #ffffff; }}
-QPushButton#primary[live="true"]:hover {{ background: #ff6f65; }}
-QPushButton#primary[live="true"]:pressed {{ background: #e0493f; }}
-QPushButton#primary[live="true"]:focus {{ border-color: #ffb3ad; }}
-QPushButton#primary[live="true"]:disabled {{
+QPushButton#pill {{
+    background: transparent; border: none; border-radius: 13px;
+    padding: 5px 13px; color: {_MUTED};
+}}
+QPushButton#pill:hover {{ color: {_TEXT}; }}
+QPushButton#pill:checked {{ background: {_ACCENT}; color: {_INK}; }}
+QPushButton#pill:disabled {{ color: {_FAINT}; }}
+QPushButton#pill:checked:disabled {{ background: {_HOVER}; color: {_MUTED}; }}
+QPushButton#pill:focus {{ border: 1px solid {_ACCENT}; }}
+QPushButton#mark {{
+    background: {_MARK_WASH}; border: 1px solid {_MARK_WASH}; border-radius: 18px;
+    padding: 9px 16px; color: {_MARK};
+}}
+QPushButton#mark:hover {{ border-color: {_MARK}; }}
+QPushButton#mark:disabled {{
     background: transparent; border-color: {_LINE}; color: {_FAINT};
 }}
+QPushButton#link {{
+    background: transparent; border: none; padding: 2px 4px; color: {_ACCENT};
+}}
+QPushButton#link:hover {{ color: {_ACCENT_HOVER}; }}
+QPushButton#link:disabled {{ color: {_FAINT}; }}
 
 QTextEdit {{
     background: {_SURFACE};
     border: none;
-    border-radius: 10px;
+    border-radius: 14px;
     padding: 14px 16px;
-    selection-background-color: {_HOVER};
-    selection-color: {_TEXT};
+    selection-background-color: {_ACCENT};
+    selection-color: {_INK};
 }}
-QFrame#rule {{ background: {_LINE}; border: none; }}
+QScrollArea {{ background: transparent; border: none; }}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
+QStackedWidget {{ background: transparent; }}
 
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px 0; }}
 QScrollBar::handle:vertical {{
-    background: {_RAISED}; border-radius: 4px; min-height: 32px;
+    background: {_HOVER}; border-radius: 4px; min-height: 32px;
 }}
-QScrollBar::handle:vertical:hover {{ background: {_FOCUS}; }}
+QScrollBar::handle:vertical:hover {{ background: {_DASH}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
     background: transparent;
@@ -321,12 +391,14 @@ class _Job:
             that choosing another one for the next lecture leaves it alone.
         model: Model to recognise it with, as named in the window or in
             ``asr.model``; fixed when queued, like the language.
+        seconds: Length of the recording, for its card on the board.
     """
 
     wav: Path
     marks: tuple[float, ...]
     language: str
     model: str = "large-v3"
+    seconds: float = 0.0
 
 
 class _JobQueue:
@@ -383,6 +455,11 @@ class _JobQueue:
         """The recordings not yet started, in order."""
         with self._lock:
             return [job.wav for job in self._jobs]
+
+    def jobs(self) -> list[_Job]:
+        """The jobs not yet started, in order."""
+        with self._lock:
+            return list(self._jobs)
 
 
 class _TranscribeWorker(QThread):
@@ -575,9 +652,9 @@ class _Combo(QComboBox):
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(_MUTED if self.isEnabled() else _FAINT))
+        painter.setBrush(QColor(_ACCENT if self.isEnabled() else _FAINT))
 
-        right = self.width() - 13.0
+        right = self.width() - 14.0
         top = (self.height() - self._HEIGHT) / 2
         painter.drawPolygon(
             QPolygonF(
@@ -590,11 +667,559 @@ class _Combo(QComboBox):
         )
 
 
+class _Pills(QFrame):
+    """A row of choices of which exactly one holds, the chosen one in yellow.
+
+    Used where every option should stay in sight -- two languages, a few
+    models -- since a drop-down would hide the alternatives behind a click.
+    """
+
+    changed = Signal(str)
+    """Sent with the data of an option the user clicked; not sent by :meth:`select`."""
+
+    def __init__(self) -> None:
+        """Create an empty row."""
+        super().__init__()
+        self.setObjectName("pills")
+        self._row = QHBoxLayout(self)
+        self._row.setContentsMargins(3, 3, 3, 3)
+        self._row.setSpacing(2)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._group.idClicked.connect(self._on_clicked)
+        self._data: list[str] = []
+
+    def add(self, text: str, data: str, *, tooltip: str = "") -> None:
+        """Append one option.
+
+        Args:
+            text: What the option says.
+            data: What :meth:`current_data` returns while it is chosen.
+            tooltip: A longer explanation shown on hover.
+        """
+        button = QPushButton(text)
+        button.setObjectName("pill")
+        button.setCheckable(True)
+        button.setToolTip(tooltip)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._group.addButton(button, len(self._data))
+        self._data.append(data)
+        self._row.addWidget(button)
+
+    def select(self, data: str) -> None:
+        """Choose the option holding ``data``; an unknown value changes nothing."""
+        if data in self._data:
+            button = self._group.button(self._data.index(data))
+            button.setChecked(True)
+
+    def current_data(self) -> str:
+        """The data of the chosen option, or an empty string when none is."""
+        index = self._group.checkedId()
+        return self._data[index] if index >= 0 else ""
+
+    def current_text(self) -> str:
+        """What the chosen option says, or an empty string when none is."""
+        button = self._group.checkedButton()
+        return "" if button is None else button.text()
+
+    def count(self) -> int:
+        """How many options there are."""
+        return len(self._data)
+
+    def texts(self) -> list[str]:
+        """What every option says, in order."""
+        return [self._group.button(i).text() for i in range(len(self._data))]
+
+    def _on_clicked(self, index: int) -> None:
+        self.changed.emit(self._data[index])
+
+
+class _RecordButton(QPushButton):
+    """The record and stop button, painted so that it can pulse while live.
+
+    The pulse is a ring that grows and fades around the pill every 1.8
+    seconds. It runs only while recording, so an idle window costs no redraws.
+    """
+
+    _MARGIN = 10.0
+    """Room around the pill for the pulse to grow into."""
+    _HEIGHT = 46.0
+    _PAD = 24.0
+    _DOT = 13.0
+    _GAP = 10.0
+
+    def __init__(self) -> None:
+        """Create a button that says Record."""
+        super().__init__("Record")
+        self._live = False
+        self._pulse = 0.0
+        self._animation = QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.setDuration(1800)
+        self._animation.setLoopCount(-1)
+        self._animation.valueChanged.connect(self._on_pulse)
+        font = self.font()
+        font.setPointSizeF(11.5)
+        font.setWeight(QFont.Weight.DemiBold)
+        self.setFont(font)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setFixedSize(self.sizeHint())
+
+    def set_live(self, live: bool) -> None:
+        """Switch between Record and a pulsing Stop.
+
+        Args:
+            live: Whether a recording is running.
+        """
+        self.setText("Stop" if live else "Record")
+        if live == self._live:
+            return
+        self._live = live
+        if live:
+            self._animation.start()
+        else:
+            self._animation.stop()
+            self._pulse = 0.0
+        self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        """Fit the longer of the two labels, so the button never changes width."""
+        metrics = self.fontMetrics()
+        text = max(
+            metrics.horizontalAdvance("Record"), metrics.horizontalAdvance("Stop")
+        )
+        width = 2 * self._PAD + self._DOT + self._GAP + text + 2 * self._MARGIN
+        return QSize(round(width), round(self._HEIGHT + 2 * self._MARGIN))
+
+    def _on_pulse(self, value: object) -> None:
+        self._pulse = float(cast(float, value))
+        self.update()
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
+        """Draw the pulse, the pill, the glyph and the label."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        margin = self._MARGIN
+        pill = QRectF(self.rect()).adjusted(margin, margin, -margin, -margin)
+        radius = pill.height() / 2
+        enabled = self.isEnabled()
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        if self._live and self._pulse > 0.0:
+            grow = self._pulse * margin
+            ring = QColor(_LIVE)
+            ring.setAlphaF(0.5 * (1.0 - self._pulse))
+            painter.setBrush(ring)
+            painter.drawRoundedRect(
+                pill.adjusted(-grow, -grow, grow, grow), radius + grow, radius + grow
+            )
+
+        if enabled:
+            fill = _LIVE if self._live else _ACCENT
+            if self.underMouse() and not self._live:
+                fill = _ACCENT_HOVER
+            painter.setBrush(QColor(fill))
+        else:
+            painter.setPen(QPen(QColor(_LINE), 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(pill, radius, radius)
+        if enabled and self.hasFocus():
+            painter.setPen(QPen(QColor(_TEXT), 2.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(pill.adjusted(-3, -3, 3, 3), radius + 3, radius + 3)
+
+        text_width = self.fontMetrics().horizontalAdvance(self.text())
+        left = pill.center().x() - (self._DOT + self._GAP + text_width) / 2
+        glyph = QRectF(left, pill.center().y() - self._DOT / 2, self._DOT, self._DOT)
+        painter.setPen(Qt.PenStyle.NoPen)
+        if not enabled:
+            painter.setBrush(QColor(_FAINT))
+        elif self._live:
+            painter.setBrush(QColor(_INK))
+        else:
+            painter.setBrush(QColor(_LIVE))
+        if self._live:
+            painter.drawRoundedRect(glyph.adjusted(1, 1, -1, -1), 2.5, 2.5)
+        else:
+            painter.drawEllipse(glyph)
+
+        painter.setPen(QColor(_INK if enabled else _FAINT))
+        painter.drawText(
+            QRectF(
+                left + self._DOT + self._GAP, pill.top(), text_width + 2, pill.height()
+            ),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            self.text(),
+        )
+
+
+class _Waveform(QWidget):
+    """The last ten seconds of sound, one bar per captured block, newest on the right.
+
+    Real levels rather than decoration: a flat line says at a glance that the
+    lecture is not reaching the recording. It moves only as blocks arrive, so
+    there is no timer to stop when nothing is recorded.
+    """
+
+    _BAR = 3.0
+    _GAP = 2.0
+    _HISTORY = 160
+    """Blocks kept: 1024 frames each, 64 ms at 16 kHz, so about ten seconds."""
+
+    def __init__(self) -> None:
+        """Create a flat line."""
+        super().__init__()
+        self.setMinimumSize(120, 52)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._levels: deque[float] = deque(maxlen=self._HISTORY)
+        self._live = False
+
+    def set_rms(self, rms: float) -> None:
+        """Add the level of the block just recorded.
+
+        Args:
+            rms: Block level from 0.0 to 1.0.
+        """
+        self._levels.append(loudness(rms))
+        self.update()
+
+    def set_live(self, live: bool) -> None:
+        """Draw in yellow while recording, in grey once it has stopped."""
+        self._live = live
+        self.update()
+
+    def reset(self) -> None:
+        """Forget the history, for a new recording."""
+        self._levels.clear()
+        self.update()
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
+        """Draw one rounded bar per block, centred on the middle line."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(_ACCENT if self._live else _DASH))
+        step = self._BAR + self._GAP
+        count = int(self.width() // step)
+        recent = list(self._levels)[-count:] if count else []
+        # Unfilled history shows as the floor, so the newest block always
+        # sits at the right edge.
+        levels = [0.0] * (count - len(recent)) + recent
+        height = float(self.height())
+        for index, level in enumerate(levels):
+            bar = max(3.0, level * (height - 4.0))
+            painter.drawRoundedRect(
+                QRectF(index * step, (height - bar) / 2, self._BAR, bar), 1.5, 1.5
+            )
+
+
+class _StripeBar(QWidget):
+    """Recognition progress: a yellow fill whose diagonal stripes keep moving.
+
+    The stripes show the work is alive between progress reports, which on a
+    long segment can be seconds apart. Their timer runs only while the
+    recording on the card is being decoded.
+    """
+
+    _HEIGHT = 8
+    _PERIOD = 14.0
+
+    def __init__(self) -> None:
+        """Create an empty bar that is standing still."""
+        super().__init__()
+        self.setFixedHeight(self._HEIGHT)
+        self._fraction = 0.0
+        self._offset = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._advance)
+
+    def set_fraction(self, fraction: float) -> None:
+        """Fill the bar to a share of its width.
+
+        Args:
+            fraction: How full to draw it, from 0.0 to 1.0.
+        """
+        self._fraction = max(0.0, min(1.0, fraction))
+        self.update()
+
+    def set_running(self, running: bool) -> None:
+        """Start or stop the stripes."""
+        if running and not self._timer.isActive():
+            self._timer.start()
+        elif not running:
+            self._timer.stop()
+
+    def _advance(self) -> None:
+        self._offset = (self._offset + 1.0) % self._PERIOD
+        self.update()
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
+        """Draw the track, the fill, and the stripes clipped to the fill."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        width = float(self.width())
+        height = float(self.height())
+        radius = height / 2
+        painter.setBrush(QColor(_HOVER))
+        painter.drawRoundedRect(QRectF(0.0, 0.0, width, height), radius, radius)
+        if self._fraction <= 0.0:
+            return
+        # Never narrower than the bar is tall, or the rounded ends of a bar
+        # that has barely started fold into a smudge.
+        fill = QRectF(0.0, 0.0, max(width * self._fraction, height), height)
+        painter.setBrush(QColor(_ACCENT))
+        painter.drawRoundedRect(fill, radius, radius)
+        clip = QPainterPath()
+        clip.addRoundedRect(fill, radius, radius)
+        painter.setClipPath(clip)
+        stripe = QColor(_INK)
+        stripe.setAlphaF(0.22)
+        painter.setBrush(stripe)
+        x = self._offset - self._PERIOD - height
+        while x < fill.width():
+            painter.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(x, height),
+                        QPointF(x + height, 0.0),
+                        QPointF(x + height + self._PERIOD / 2, 0.0),
+                        QPointF(x + self._PERIOD / 2, height),
+                    ]
+                )
+            )
+            x += self._PERIOD
+
+
+class _JobCard(QFrame):
+    """One recording on the board: its name, its settings, how far it got."""
+
+    opened = Signal()
+    """Sent when the card's link is clicked."""
+
+    def __init__(
+        self,
+        title: str,
+        meta: str,
+        *,
+        right: str = "",
+        progress: bool = False,
+        action: str = "",
+        problem: bool = False,
+    ) -> None:
+        """Lay a card out.
+
+        Args:
+            title: The lecture folder's name.
+            meta: Model, language and length, on one line.
+            right: A short state in the top right corner.
+            progress: Whether to show a progress bar, for the card being decoded.
+            action: Text of a link at the bottom; none when empty.
+            problem: Whether the card reports a failure, which draws its edge
+                in pink-red.
+        """
+        super().__init__()
+        self.setObjectName("card")
+        self.setProperty("live", progress)
+        self.setProperty("problem", problem)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(14, 12, 14, 12)
+        column.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        name = QLabel(title)
+        name.setObjectName("cardtitle")
+        name_font = name.font()
+        name_font.setWeight(QFont.Weight.DemiBold)
+        name.setFont(name_font)
+        self._right = QLabel(right)
+        self._right.setObjectName("sub")
+        mono = QFont()
+        mono.setFamilies(_MONO_FAMILIES)
+        mono.setPointSizeF(9)
+        self._right.setFont(mono)
+        top.addWidget(name, 1)
+        top.addWidget(self._right)
+        column.addLayout(top)
+
+        details = QLabel(meta)
+        details.setObjectName("sub")
+        details.setWordWrap(True)
+        column.addWidget(details)
+
+        self.bar: _StripeBar | None = None
+        if progress:
+            self.bar = _StripeBar()
+            column.addWidget(self.bar)
+        if action:
+            link = QPushButton(action)
+            link.setObjectName("link")
+            link.setCursor(Qt.CursorShape.PointingHandCursor)
+            link.clicked.connect(self.opened.emit)
+            row = QHBoxLayout()
+            row.addWidget(link)
+            row.addStretch(1)
+            column.addLayout(row)
+
+    def set_right(self, text: str) -> None:
+        """Change the state in the top right corner."""
+        self._right.setText(text)
+
+    def set_progress(self, fraction: float, text: str) -> None:
+        """Advance the bar and say how far it got.
+
+        Args:
+            fraction: Share of the recording decoded, from 0.0 to 1.0.
+            text: Percentage and time left, for the corner.
+        """
+        self._right.setText(text)
+        if self.bar is not None:
+            self.bar.set_fraction(fraction)
+            self.bar.set_running(True)
+
+
+class _Column(QFrame):
+    """One stage of the queue: a heading with a count, then a card per recording.
+
+    Cards are matched to their recordings by key, so a card that stays put is
+    kept as it is, and one that arrives -- from the column before, or new --
+    unfolds and fades in, which reads as it having moved across.
+    """
+
+    def __init__(self, title: str, colour: str, empty: str) -> None:
+        """Lay out an empty column.
+
+        Args:
+            title: The stage's name.
+            colour: Its dot, in the colour of what the stage means.
+            empty: What the column says while it holds no cards.
+        """
+        super().__init__()
+        self.setObjectName("column")
+        self.setMinimumWidth(220)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(14, 14, 14, 14)
+        column.setSpacing(10)
+
+        self._head = QHBoxLayout()
+        self._head.setSpacing(8)
+        dot = QLabel()
+        dot.setFixedSize(9, 9)
+        dot.setStyleSheet(f"background: {colour}; border-radius: 4px;")
+        name = QLabel(title)
+        name_font = name.font()
+        name_font.setWeight(QFont.Weight.DemiBold)
+        name_font.setPointSizeF(10.5)
+        name.setFont(name_font)
+        self._count = QLabel("0")
+        self._count.setObjectName("badge")
+        self._head.addWidget(dot)
+        self._head.addWidget(name)
+        self._head.addWidget(self._count)
+        self._head.addStretch(1)
+        column.addLayout(self._head)
+
+        self.subtitle = QLabel("")
+        self.subtitle.setObjectName("sub")
+        self.subtitle.setWordWrap(True)
+        self.subtitle.hide()
+        column.addWidget(self.subtitle)
+
+        self._empty = QLabel(empty)
+        self._empty.setObjectName("empty")
+        self._empty.setWordWrap(True)
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(self._empty)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget()
+        self._list = QVBoxLayout(body)
+        self._list.setContentsMargins(0, 0, 0, 0)
+        self._list.setSpacing(10)
+        self._list.addStretch(1)
+        scroll.setWidget(body)
+        column.addWidget(scroll, 1)
+        self._cards: dict[Hashable, _JobCard] = {}
+
+    def add_action(self, button: QPushButton) -> None:
+        """Put a button at the right end of the heading."""
+        self._head.addWidget(button)
+
+    def set_subtitle(self, text: str) -> None:
+        """Say what the stage is doing under its heading; hidden when empty."""
+        self.subtitle.setText(text)
+        self.subtitle.setVisible(bool(text))
+
+    def card(self, key: Hashable) -> _JobCard | None:
+        """The card shown for a key, if there is one."""
+        return self._cards.get(key)
+
+    def sync(self, items: Sequence[tuple[Hashable, Callable[[], _JobCard]]]) -> None:
+        """Show exactly these cards, in this order.
+
+        Args:
+            items: A key per card and a function that builds the card, called
+                only for a key the column does not already show.
+        """
+        keys = {key for key, _build in items}
+        for key in [key for key in self._cards if key not in keys]:
+            gone = self._cards.pop(key)
+            self._list.removeWidget(gone)
+            gone.deleteLater()
+        for index, (key, build) in enumerate(items):
+            card = self._cards.get(key)
+            if card is None:
+                card = build()
+                self._cards[key] = card
+                self._list.insertWidget(index, card)
+                self._appear(card)
+            elif self._list.indexOf(card) != index:
+                self._list.removeWidget(card)
+                self._list.insertWidget(index, card)
+        self._count.setText(str(len(items)))
+        self._empty.setVisible(not items)
+
+    @staticmethod
+    def _appear(card: _JobCard) -> None:
+        """Unfold a new card from nothing while it fades in."""
+        effect = QGraphicsOpacityEffect(card)
+        effect.setOpacity(0.0)
+        card.setGraphicsEffect(effect)
+        fade = QPropertyAnimation(effect, b"opacity", card)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        unfold = QPropertyAnimation(card, b"maximumHeight", card)
+        unfold.setStartValue(0)
+        unfold.setEndValue(card.sizeHint().height())
+        group = QParallelAnimationGroup(card)
+        for animation in (fade, unfold):
+            animation.setDuration(320)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            group.addAnimation(animation)
+
+        def settle() -> None:
+            # Unlimited again, so the card can grow if its text wraps, and
+            # without the effect, which would keep repainting it offscreen.
+            card.setMaximumHeight(_UNLIMITED)
+            # The stubs ask for an effect, but None is how Qt removes one.
+            card.setGraphicsEffect(None)  # type: ignore[arg-type]
+
+        group.finished.connect(settle)
+        group.start()
+
+
 class _Chip(QWidget):
     """A small pill in the header saying what the window is doing.
 
-    While recording its dot is red and breathes, so a live recording shows
-    from across the room even with the clock too small to read.
+    While recording its dot is pink-red and breathes, so a live recording
+    shows from across the room even with the clock too small to read.
     """
 
     _DOT = 7.0
@@ -620,7 +1245,7 @@ class _Chip(QWidget):
 
         Args:
             text: A word or two, lower case.
-            live: Whether audio is being captured, which turns the dot red.
+            live: Whether audio is being captured, which turns the dot pink-red.
         """
         self._text = text
         self._live = live
@@ -669,7 +1294,7 @@ class _Chip(QWidget):
 
 
 class _Transcript(QTextEdit):
-    """The transcript pane: timecodes in a gutter, marks washed in amber.
+    """The reading pane: timecodes in a gutter, marks washed in orange.
 
     Drawn from the paragraphs :func:`read_transcript` finds in the text, so
     a transcript opened from disk shows the same as one just made. What is
@@ -680,7 +1305,7 @@ class _Transcript(QTextEdit):
         """Create an empty pane."""
         super().__init__()
         self.setReadOnly(True)
-        self.setPlaceholderText("the transcript appears here")
+        self.setPlaceholderText("not transcribed yet")
         font = QFont()
         font.setFamilies(_UI_FAMILIES)
         font.setPointSizeF(10.5)
@@ -699,27 +1324,6 @@ class _Transcript(QTextEdit):
         parts.extend(_passage_html(passage) for passage in passages)
         self.setHtml("".join(parts))
         self._source = text
-
-    def add_preview(self, timecode: str, text: str) -> None:
-        """Append one segment while recognition is still running.
-
-        Appended rather than redrawn: a full lecture runs to a thousand
-        segments, and laying the whole document out again for each one
-        would slow down the very thing it is watching.
-
-        Args:
-            timecode: Where the segment is, without brackets.
-            text: What was recognised in it.
-        """
-        bar = self.verticalScrollBar()
-        following = bar.value() == bar.maximum()
-        cursor = QTextCursor(self.document())
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertHtml(_passage_html(Passage(timecode, text, marked=False)))
-        self._source += f"[{timecode}] {text}\n"
-        # Keep the newest line in view, unless the reader scrolled up to read.
-        if following:
-            bar.setValue(bar.maximum())
 
     def clear(self) -> None:
         """Empty the pane and forget the text behind it."""
@@ -745,103 +1349,27 @@ class _Transcript(QTextEdit):
         return data
 
 
-class _LevelMeter(QWidget):
-    """A rounded bar showing how loud the incoming audio is.
+@dataclass(frozen=True, slots=True)
+class _Done:
+    """A recording the queue has finished with, shown under Transcripts.
 
-    The fill brightens from left to right, so a louder passage reveals a
-    brighter end of the bar and the level reads at a glance without colour,
-    which is kept for meaning.
+    Attributes:
+        key: Tells two runs of one recording apart on the board.
+        wav: The recording.
+        transcript: The file written, or ``None`` when recognition failed.
+        note: How long it took, or what went wrong.
+        problem: Whether it failed.
     """
 
-    _HEIGHT = 6
-    _FALL = 0.035
-    """Share of the bar the level may sink per block, about half of it a second.
-
-    A block is 1024 frames, which at the default 16 kHz is 64 ms.
-    """
-    _PEAK_FALL = 0.004
-
-    def __init__(self) -> None:
-        """Create an empty meter."""
-        super().__init__()
-        self.setFixedHeight(self._HEIGHT)
-        self._level = 0.0
-        self._peak = 0.0
-        self._progress = False
-
-    def set_rms(self, rms: float) -> None:
-        """Show the level of the block just recorded.
-
-        Args:
-            rms: Block level from 0.0 to 1.0.
-        """
-        # Rises at once but sinks gradually, as a hardware meter does. Blocks
-        # arrive every 64 ms, and following each one exactly makes the bar
-        # flicker between syllables instead of showing speech.
-        self._level = max(loudness(rms), self._level - self._FALL)
-        # The peak marker sinks slower still, so a brief loud passage stays
-        # on screen long enough to be seen.
-        self._peak = max(self._level, self._peak - self._PEAK_FALL)
-        self._progress = False
-        self.update()
-
-    def set_fraction(self, fraction: float) -> None:
-        """Fill the bar to a share of its width, with no peak marker.
-
-        The same widget serves as the progress bar while recognition runs.
-        It is already a bar that fills from the left, and a second one would
-        be furniture for no gain.
-
-        Args:
-            fraction: How full to draw it, from 0.0 to 1.0.
-        """
-        self._level = max(0.0, min(1.0, fraction))
-        self._peak = 0.0
-        self._progress = True
-        self.update()
-
-    def reset(self) -> None:
-        """Empty the meter, for when nothing is being recorded."""
-        self._level = 0.0
-        self._peak = 0.0
-        self._progress = False
-        self.update()
-
-    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 (Qt override)
-        """Draw the track, the fill for the current level, and the peak."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        width = float(self.width())
-        height = float(self.height())
-        radius = height / 2
-
-        painter.setBrush(QColor(_RAISED))
-        painter.drawRoundedRect(QRectF(0.0, 0.0, width, height), radius, radius)
-
-        filled = width * self._level
-        if filled > 0.0:
-            if self._progress:
-                painter.setBrush(QColor(_TEXT))
-            else:
-                ramp = QLinearGradient(0.0, 0.0, width, 0.0)
-                ramp.setColorAt(0.0, QColor(_FAINT))
-                ramp.setColorAt(1.0, QColor("#ffffff"))
-                painter.setBrush(ramp)
-            # Never narrower than the bar is tall, or the rounded ends of a
-            # nearly silent level fold into a smudge.
-            painter.drawRoundedRect(
-                QRectF(0.0, 0.0, max(filled, height), height), radius, radius
-            )
-
-        if self._peak > self._level:
-            painter.setBrush(QColor(_TEXT))
-            left = min(width * self._peak, width - 2.0)
-            painter.drawRoundedRect(QRectF(left - 1.0, 0.0, 2.0, height), 1.0, 1.0)
+    key: int
+    wav: Path
+    transcript: Path | None
+    note: str
+    problem: bool = False
 
 
 class _Window(QWidget):
-    """The single window: record a lecture, then transcribe what was recorded."""
+    """The single window: options, the recorder, and the queue in three columns."""
 
     def __init__(self, config: Config) -> None:
         """Build the window and fill in the device list.
@@ -850,6 +1378,7 @@ class _Window(QWidget):
             config: Effective configuration.
         """
         super().__init__()
+        self.setObjectName("window")
         self._config = config
         self._devices: list[LoopbackDevice] = []
         # The device chosen by hand from the list, kept across refills of it.
@@ -862,13 +1391,18 @@ class _Window(QWidget):
         self._backlog: list[_Job] = []
         # The recording being decoded, None between recordings.
         self._current: Path | None = None
-        # One request covers recording and recognition, which may now overlap;
+        # Every recording queued in this session, for its card.
+        self._queued: dict[Path, _Job] = {}
+        self._finished: list[_Done] = []
+        self._next_key = 0
+        # One request covers recording and recognition, which may overlap;
         # it is let go only once neither is running.
         self._awake: Inhibition | None = None
         self._recording = False
         self._transcribing = False
         self._stopping_recognition = False
         self._closing = False
+        # The recording in view: the last one made, or one opened.
         self._wav: Path | None = None
         self._marks: list[float] = []
         self._elapsed = 0.0
@@ -877,22 +1411,24 @@ class _Window(QWidget):
         self._load_devices()
         self._load_languages()
         self._load_models()
+        self._sync_board()
         self._refresh()
 
     def _build(self) -> None:
-        """Lay the window out. One column, top to bottom, nothing hidden."""
+        """Lay the window out: options, the recorder, then the queue."""
         self.setWindowTitle("lecture scribe")
-        self.setMinimumSize(660, 640)
+        self.setMinimumSize(760, 680)
+        self.resize(1180, 800)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(34, 26, 34, 26)
-        layout.setSpacing(0)
+        layout.setContentsMargins(26, 20, 26, 20)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         title = QLabel("Lecture Scribe")
         title.setObjectName("title")
         title_font = title.font()
-        title_font.setPointSize(11)
+        title_font.setPointSize(14)
         title_font.setWeight(QFont.Weight.DemiBold)
         title.setFont(title_font)
         self._chip = _Chip()
@@ -900,142 +1436,189 @@ class _Window(QWidget):
         header.addStretch(1)
         header.addWidget(self._chip)
         layout.addLayout(header)
-        layout.addSpacing(22)
 
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(5)
-        # The device name is the longest by far; the language is one word and
-        # keeps the width that word needs.
-        form.setColumnStretch(0, 1)
-        form.setColumnStretch(1, 2)
-        form.setColumnStretch(2, 0)
-        form.setColumnStretch(3, 1)
+        layout.addWidget(self._build_options())
+        layout.addWidget(self._build_recorder())
+
+        self._status = QLabel("ready")
+        self._status.setObjectName("status")
+        self._status.setWordWrap(True)
+        layout.addWidget(self._status)
+
+        self._pages = QStackedWidget()
+        self._pages.addWidget(self._build_board())
+        self._pages.addWidget(self._build_reader())
+        layout.addWidget(self._pages, 1)
+
+        mark = QShortcut(QKeySequence("Ctrl+M"), self)
+        mark.activated.connect(self._mark_moment)
+        open_file = QShortcut(QKeySequence("Ctrl+O"), self)
+        open_file.activated.connect(self._open_recording)
+
+    def _build_options(self) -> QFrame:
+        """The bar of settings: where to record from, and how to recognise it."""
+        bar = QFrame()
+        bar.setObjectName("bar")
+        rows = QVBoxLayout(bar)
+        rows.setContentsMargins(14, 10, 14, 10)
+        rows.setSpacing(8)
+
+        first = QHBoxLayout()
+        first.setSpacing(8)
         self._course = QLineEdit()
-        self._course.setPlaceholderText("used for the folder")
+        self._course.setPlaceholderText("for example os")
+        self._course.setToolTip("names the folder the recording goes into")
+        self._course.setFixedWidth(160)
         self._course.textChanged.connect(self._refresh)
         self._device_box = _Combo()
         # Without this the longest device name sets the window's minimum width.
         self._device_box.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        self._device_box.setMinimumContentsLength(12)
+        self._device_box.setMinimumContentsLength(14)
         # `activated` rather than `currentIndexChanged`: only a choice made by
         # hand counts, not the list being refilled underneath.
         self._device_box.activated.connect(self._on_device_picked)
         self._device_box.opening.connect(self._on_device_list_opening)
-        self._language_box = _Combo()
+        self._language_box = _Pills()
         self._language_box.setToolTip(
-            "the language the lecture is spoken in; used when transcribing"
+            "the language the lecture is spoken in; fixed for a recording when "
+            "it is queued"
         )
-        self._model_box = _Combo()
-        # Each entry carries its note, which would otherwise widen the window.
-        self._model_box.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self._model_box.setMinimumContentsLength(10)
-        self._model_box.currentIndexChanged.connect(self._on_model_picked)
-        form.addWidget(_caption("Course"), 0, 0)
-        form.addWidget(_caption("Device"), 0, 1)
-        form.addWidget(_caption("Language"), 0, 2)
-        form.addWidget(_caption("Model"), 0, 3)
-        form.addWidget(self._course, 1, 0)
-        form.addWidget(self._device_box, 1, 1)
-        form.addWidget(self._language_box, 1, 2)
-        form.addWidget(self._model_box, 1, 3)
-        layout.addLayout(form)
-        layout.addSpacing(34)
+        first.addWidget(_caption("Course"))
+        first.addWidget(self._course)
+        first.addSpacing(10)
+        first.addWidget(_caption("Device"))
+        first.addWidget(self._device_box, 1)
+        first.addSpacing(10)
+        first.addWidget(_caption("Language"))
+        first.addWidget(self._language_box)
+        rows.addLayout(first)
 
+        second = QHBoxLayout()
+        second.setSpacing(8)
+        self._model_box = _Pills()
+        self._model_box.changed.connect(self._on_model_picked)
+        self._model_note = QLabel("")
+        self._model_note.setObjectName("sub")
+        self._model_note.setWordWrap(True)
+        second.addWidget(_caption("Model"))
+        second.addWidget(self._model_box)
+        second.addSpacing(6)
+        second.addWidget(self._model_note, 1)
+        rows.addLayout(second)
+        return bar
+
+    def _build_recorder(self) -> QFrame:
+        """The recording strip: the button, the clock, the sound, the mark."""
+        strip = QFrame()
+        strip.setObjectName("strip")
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(10, 8, 20, 8)
+        row.setSpacing(18)
+
+        self._record = _RecordButton()
+        self._record.clicked.connect(self._toggle_record)
+        row.addWidget(self._record)
+
+        clock_column = QVBoxLayout()
+        clock_column.setSpacing(2)
         self._clock = QLabel(format_duration(0.0))
         self._clock.setObjectName("clock")
-        self._clock.setAlignment(Qt.AlignmentFlag.AlignCenter)
         clock_font = QFont()
-        clock_font.setFamilies(_UI_FAMILIES)
-        clock_font.setPointSize(44)
-        clock_font.setWeight(QFont.Weight.ExtraLight)
-        # Proportional digits make the whole clock shuffle sideways each second.
-        clock_font.setFeature(QFont.Tag("tnum"), 1)
-        clock_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 96)
+        clock_font.setFamilies(_MONO_FAMILIES)
+        clock_font.setPointSize(26)
         self._clock.setFont(clock_font)
-        layout.addWidget(self._clock)
-        layout.addSpacing(16)
+        self._levels = QLabel("not recording")
+        self._levels.setObjectName("sub")
+        clock_column.addWidget(self._clock)
+        clock_column.addWidget(self._levels)
+        row.addLayout(clock_column)
 
-        self._meter = _LevelMeter()
-        layout.addWidget(self._meter)
-        layout.addSpacing(10)
+        self._wave = _Waveform()
+        row.addWidget(self._wave, 1)
 
-        self._levels = QLabel("")
-        self._levels.setObjectName("levels")
-        self._levels.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _track(self._levels, 0.8)
-        layout.addWidget(self._levels)
-        layout.addSpacing(28)
-
-        self._record = QPushButton("record")
-        self._record.setObjectName("primary")
-        self._record.clicked.connect(self._toggle_record)
-        self._mark = QPushButton("mark")
+        self._mark = QPushButton("Mark")
+        self._mark.setObjectName("mark")
         self._mark.setIcon(_glyph("dot", _MARK))
+        self._mark.setIconSize(QSize(_GLYPH + _GLYPH_GAP, _GLYPH))
         self._mark.setToolTip("flag this moment in the transcript (Ctrl+M)")
+        self._mark.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mark.clicked.connect(self._mark_moment)
-        self._open = QPushButton("open")
-        self._open.setToolTip("transcribe a recording made earlier (Ctrl+O)")
-        self._open.clicked.connect(self._open_recording)
-        self._text = QPushButton("transcribe")
-        self._text.setToolTip(
-            "queue this recording for transcription; a new recording is "
-            "queued by itself when it stops"
+        row.addWidget(self._mark)
+        return strip
+
+    def _build_board(self) -> QWidget:
+        """The queue: waiting, being transcribed, and done."""
+        board = QWidget()
+        self._board = QBoxLayout(QBoxLayout.Direction.LeftToRight, board)
+        self._board.setContentsMargins(0, 0, 0, 0)
+        self._board.setSpacing(14)
+
+        self._waiting_col = _Column(
+            "Waiting", _FAINT, "A recording lands here when you press stop."
         )
-        self._text.clicked.connect(self._start_transcription)
+        self._working_col = _Column("Transcribing", _ACCENT, "The GPU is free.")
+        self._done_col = _Column(
+            "Transcripts", _DONE, "Finished transcripts appear here."
+        )
+        self._queue_line = self._working_col.subtitle
 
-        buttons = QHBoxLayout()
-        buttons.setSpacing(10)
-        buttons.addStretch(1)
-        for button in (self._record, self._mark, self._open, self._text):
-            button.setIconSize(QSize(_GLYPH + _GLYPH_GAP, _GLYPH))
-            buttons.addWidget(button)
-        buttons.addStretch(1)
-        layout.addLayout(buttons)
-        layout.addSpacing(28)
-
-        rule = QFrame()
-        rule.setObjectName("rule")
-        rule.setFixedHeight(1)
-        layout.addWidget(rule)
-        layout.addSpacing(14)
-
-        self._status = QLabel("ready")
-        self._status.setObjectName("status")
-        self._status.setWordWrap(True)
-        layout.addWidget(self._status)
-        layout.addSpacing(8)
-
-        # Recognition keeps a line of its own, since the clock, the meter and
-        # the status line above belong to a recording whenever one runs.
-        queue_row = QHBoxLayout()
-        queue_row.setSpacing(10)
-        self._queue_line = QLabel("")
-        self._queue_line.setObjectName("levels")
-        self._queue_line.setWordWrap(True)
-        self._stop_text = QPushButton("stop")
-        self._stop_text.setIcon(_glyph("square", _TEXT))
-        self._stop_text.setIconSize(QSize(_GLYPH + _GLYPH_GAP, _GLYPH))
+        self._stop_text = QPushButton("Stop all")
         self._stop_text.setToolTip(
             "stop recognition and clear the queue; the recordings stay on disk"
         )
         self._stop_text.clicked.connect(self._stop_transcription)
-        queue_row.addWidget(self._queue_line, 1)
-        queue_row.addWidget(self._stop_text)
-        layout.addLayout(queue_row)
-        layout.addSpacing(14)
+        self._working_col.add_action(self._stop_text)
 
+        self._open = QPushButton("Open file…")
+        self._open.setObjectName("link")
+        self._open.setToolTip("transcribe a recording made earlier (Ctrl+O)")
+        self._open.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open.clicked.connect(self._open_recording)
+        self._done_col.add_action(self._open)
+
+        for column in (self._waiting_col, self._working_col, self._done_col):
+            self._board.addWidget(column, 1)
+        return board
+
+    def _build_reader(self) -> QWidget:
+        """The reading view, shown in place of the queue."""
+        page = QWidget()
+        column = QVBoxLayout(page)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(10)
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        back = QPushButton("← Back to queue")
+        back.setCursor(Qt.CursorShape.PointingHandCursor)
+        back.clicked.connect(self._show_board)
+        self._reader_title = QLabel("")
+        reader_font = self._reader_title.font()
+        reader_font.setWeight(QFont.Weight.DemiBold)
+        self._reader_title.setFont(reader_font)
+        self._text = QPushButton("Transcribe")
+        self._text.setObjectName("accent")
+        self._text.setToolTip("queue this recording for transcription")
+        self._text.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._text.clicked.connect(self._start_transcription)
+        top.addWidget(back)
+        top.addWidget(self._reader_title, 1)
+        top.addWidget(self._text)
+        column.addLayout(top)
         self._transcript = _Transcript()
-        layout.addWidget(self._transcript, 1)
+        column.addWidget(self._transcript, 1)
+        return page
 
-        mark = QShortcut(QKeySequence("Ctrl+M"), self)
-        mark.activated.connect(self._mark_moment)
-        open_file = QShortcut(QKeySequence("Ctrl+O"), self)
-        open_file.activated.connect(self._open_recording)
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 (Qt override)
+        """Stack the queue's columns when the window is too narrow for three."""
+        super().resizeEvent(event)
+        narrow = event.size().width() < _STACK_BELOW
+        self._board.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if narrow
+            else QBoxLayout.Direction.LeftToRight
+        )
 
     def _load_devices(self, *, starting: bool = False) -> LoopbackDevice | None:
         """Read the output devices afresh and select the one to record from.
@@ -1096,7 +1679,7 @@ class _Window(QWidget):
         return selected
 
     def _load_languages(self) -> None:
-        """Fill the language list and select the configured language.
+        """Offer the languages and select the configured one.
 
         A code from ``config.toml`` that the list does not offer is added
         under its own name rather than dropped, so the window never quietly
@@ -1104,54 +1687,50 @@ class _Window(QWidget):
         """
         configured = self._config.asr.language
         for code, name in _LANGUAGES:
-            self._language_box.addItem(name, code)
+            self._language_box.add(name, code)
         if all(code != configured for code, _name in _LANGUAGES):
-            self._language_box.addItem(configured, configured)
-        self._language_box.setCurrentIndex(self._language_box.findData(configured))
+            self._language_box.add(configured, configured)
+        self._language_box.select(configured)
 
     def _load_models(self) -> None:
-        """Fill the model list from ``[models]`` and select ``asr.model``.
+        """Offer the models of ``[models]`` and select ``asr.model``.
 
-        Each entry shows its note, which is the point of the list: which
-        model suits what. A configured model that is not in ``[models]`` is
-        added under its own name, as the language list does with a code.
+        The chosen model's note shows beside the list, which is the point of
+        it: which model suits what. A configured model that is not in
+        ``[models]`` is added under its own name, as a language code is.
         """
         configured = self._config.asr.model
         labels = [choice.label for choice in self._config.models]
         if configured not in labels:
-            self._model_box.addItem(configured, configured)
-            self._model_box.setItemData(0, configured, Qt.ItemDataRole.ToolTipRole)
+            self._model_box.add(configured, configured, tooltip=configured)
         for choice in self._config.models:
-            shown = f"{choice.label}  ·  {choice.note}" if choice.note else choice.label
-            self._model_box.addItem(shown, choice.label)
-            self._model_box.setItemData(
-                self._model_box.count() - 1,
-                f"{choice.note}\n{choice.model}" if choice.note else choice.model,
-                Qt.ItemDataRole.ToolTipRole,
+            self._model_box.add(
+                choice.label, choice.label, tooltip=choice.note or choice.model
             )
-        self._model_box.setCurrentIndex(self._model_box.findData(configured))
+        self._model_box.select(configured)
+        self._on_model_picked(configured)
 
-    def _on_model_picked(self, index: int) -> None:
-        """Show the chosen model's note in full, since the box cuts it short."""
-        note = self._model_box.itemData(index, Qt.ItemDataRole.ToolTipRole)
-        self._model_box.setToolTip(
-            "the model used for recordings queued from now on"
-            + (f":\n{note}" if note else "")
+    def _on_model_picked(self, label: str) -> None:
+        """Show the note of the model just chosen."""
+        note = next(
+            (choice.note for choice in self._config.models if choice.label == label),
+            "",
         )
+        self._model_note.setText(note)
 
     def _recognition_config(self) -> Config:
         """The configuration a transcription runs with, language and model as chosen.
 
         Returns:
             The configuration from ``config.toml``, with the language and
-            model fields' choices applied the way ``--language`` and
-            ``--model`` apply them on the command line. Nothing is written
-            back: the next start begins from the file again.
+            model choices applied the way ``--language`` and ``--model``
+            apply them on the command line. Nothing is written back: the
+            next start begins from the file again.
         """
         return merge_cli(
             self._config,
-            language=str(self._language_box.currentData()),
-            model=str(self._model_box.currentData()),
+            language=self._language_box.current_data(),
+            model=self._model_box.current_data(),
         )
 
     def _on_device_picked(self, index: int) -> None:
@@ -1202,7 +1781,9 @@ class _Window(QWidget):
         self._wav = recording_path(folder)
         self._marks = []
         self._elapsed = 0.0
-        self._transcript.clear()
+        self._wave.reset()
+        self._wave.set_live(True)
+        self._clock.setText(format_duration(0.0))
 
         worker = _RecordWorker(
             device,
@@ -1225,13 +1806,15 @@ class _Window(QWidget):
         worker.start()
 
     def _on_progress(self, progress: Progress) -> None:
-        """Redraw the clock, meter and level readout."""
+        """Redraw the clock, the waveform and the level readout."""
         self._elapsed = progress.elapsed
         self._clock.setText(format_duration(progress.elapsed))
         self._chip.breathe(progress.elapsed)
-        self._meter.set_rms(progress.rms)
+        self._wave.set_rms(progress.rms)
+        folder = "" if self._wav is None else f"{self._wav.parent.name}   ·   "
         self._levels.setText(
-            f"{dbfs(progress.rms)}   ·   {progress.bytes_written / 1_000_000:.1f} MB"
+            f"{folder}{dbfs(progress.rms)}   ·   "
+            f"{progress.bytes_written / 1_000_000:.1f} MB"
         )
 
     def _on_warning(self, message: str) -> None:
@@ -1246,7 +1829,7 @@ class _Window(QWidget):
         decoding to produce an empty transcript.
         """
         self._recording = False
-        self._meter.reset()
+        self._wave.set_live(False)
         self._clock.setText(format_duration(recording.duration))
         self._levels.setText(
             f"peak {dbfs(recording.peak)}   ·   "
@@ -1271,7 +1854,9 @@ class _Window(QWidget):
         else:
             # What was captured before an interruption is valid audio, so it
             # is queued like a recording that was stopped by hand.
-            queued = self._enqueue(recording.path, self._marks)
+            queued = self._enqueue(
+                recording.path, self._marks, seconds=recording.duration
+            )
             outcome = " · queued for transcription" if queued else ""
             if recording.interrupted is not None:
                 self._say(f"{recording.interrupted}{outcome}", problem=True)
@@ -1296,7 +1881,8 @@ class _Window(QWidget):
             # stays, since audio is never deleted automatically.
             remove_if_empty(self._wav.parent)
         self._wav = None
-        self._meter.reset()
+        self._wave.set_live(False)
+        self._wave.reset()
         self._clock.setText(format_duration(0.0))
         self._say(message, problem=True)
         self._refresh()
@@ -1317,7 +1903,7 @@ class _Window(QWidget):
             self._let_sleep()
         if self._recording:
             self._recording = False
-            self._meter.reset()
+            self._wave.set_live(False)
             kept = (
                 f"; whatever was captured is at {_short_path(self._wav)}"
                 if self._wav
@@ -1339,6 +1925,7 @@ class _Window(QWidget):
             f"marked {format_timecode(self._elapsed)} "
             f"({len(self._marks)} in this lecture)"
         )
+        self._refresh()
         try:
             append_mark(self._wav, self._elapsed)
         except OSError as error:
@@ -1351,13 +1938,13 @@ class _Window(QWidget):
         self._say(message)
 
     def _open_recording(self) -> None:
-        """Pick a recording made earlier and make it the one to transcribe.
+        """Pick a recording made earlier and show it, ready to transcribe.
 
         Lectures reach this folder without `scribe rec` having made them --
         copied in, renamed, recorded on another machine -- and after a
         restart the window has no recording of its own to work on either.
-        Allowed while recognition runs, but not during a recording, whose
-        marks still belong to the lecture being captured.
+        Not offered during a recording, whose marks still belong to the
+        lecture being captured.
         """
         if self._recorder is not None:
             return
@@ -1368,10 +1955,15 @@ class _Window(QWidget):
             str(self._config.output.dir),
             "Recordings (*.wav);;All files (*)",
         )
-        if not chosen:
-            return
+        if chosen:
+            self._view_recording(Path(chosen))
 
-        path = Path(chosen)
+    def _view_recording(self, path: Path) -> None:
+        """Make a recording the one in view and show its transcript, if any.
+
+        Args:
+            path: The recording, picked from a dialog or from a card.
+        """
         try:
             existing = inspect_recording(path)
         except AudioDeviceError as error:
@@ -1379,7 +1971,7 @@ class _Window(QWidget):
             return
 
         # Read before anything changes, so a damaged marks file leaves the
-        # recording that was open as it was.
+        # recording that was in view as it was.
         try:
             marks = read_marks(path)
         except (ValueError, OSError) as error:
@@ -1392,14 +1984,11 @@ class _Window(QWidget):
         # lecture's over would put >>> on unrelated sentences.
         self._marks = marks
         self._elapsed = 0.0
-        self._meter.reset()
-        self._clock.setText(format_duration(existing.duration))
-        self._levels.setText(f"{existing.size_bytes / 1_000_000:.1f} MB")
+        self._reader_title.setText(
+            f"{path.parent.name}   ·   {format_duration(existing.duration)}"
+        )
         self._show_earlier_transcript(existing, marks=len(marks))
-        if path == self._current:
-            # Its live preview picks up from here; mixed into the old
-            # transcript it would read as one text.
-            self._transcript.clear()
+        self._pages.setCurrentIndex(_READER)
         self._refresh()
 
     def _show_earlier_transcript(
@@ -1441,15 +2030,50 @@ class _Window(QWidget):
             path=existing.path,
         )
 
+    def _read_only(self, done: _Done) -> None:
+        """Show a finished transcript without making its recording the one in view.
+
+        For a card clicked during a recording: the recording in view is the
+        one being captured, and its marks must stay where they are.
+        """
+        if done.transcript is None:
+            return
+        try:
+            text = done.transcript.read_text(encoding="utf-8")
+        except OSError as error:
+            self._say(f"cannot read {done.transcript}: {error}", problem=True)
+            return
+        self._reader_title.setText(done.wav.parent.name)
+        self._transcript.show_transcript(text)
+        self._pages.setCurrentIndex(_READER)
+        self._refresh()
+
+    def _open_done(self, done: _Done) -> None:
+        """Open a finished card: read it, or bring a failed one up to retry."""
+        if self._recorder is not None:
+            self._read_only(done)
+        else:
+            self._view_recording(done.wav)
+
+    def _show_board(self) -> None:
+        """Go back from reading to the queue."""
+        self._pages.setCurrentIndex(_BOARD)
+
     def _start_transcription(self) -> None:
         """Queue the recording in view, behind any already being recognised."""
         if self._wav is None or self._recorder is not None:
             return
-        if self._enqueue(self._wav, self._marks):
+        try:
+            seconds = inspect_recording(self._wav).duration
+        except AudioDeviceError as error:
+            self._say(str(error), problem=True)
+            return
+        if self._enqueue(self._wav, self._marks, seconds=seconds):
             self._say(f"{_short_path(self._wav)} · queued for transcription")
+            self._show_board()
         self._refresh()
 
-    def _enqueue(self, wav: Path, marks: Sequence[float]) -> bool:
+    def _enqueue(self, wav: Path, marks: Sequence[float], *, seconds: float) -> bool:
         """Put a recording in line for recognition, starting a worker if none runs.
 
         A running worker is never replaced: a QThread destroyed while it
@@ -1461,6 +2085,7 @@ class _Window(QWidget):
         Args:
             wav: Recording to transcribe.
             marks: Offsets in seconds flagged during the lecture.
+            seconds: How long the recording is, for its card.
 
         Returns:
             Whether it was queued; ``False`` when it already was, or the
@@ -1473,13 +2098,18 @@ class _Window(QWidget):
             return False
         chosen = self._recognition_config().asr
         job = _Job(
-            wav=wav, marks=tuple(marks), language=chosen.language, model=chosen.model
+            wav=wav,
+            marks=tuple(marks),
+            language=chosen.language,
+            model=chosen.model,
+            seconds=seconds,
         )
+        self._queued[wav] = job
         if self._transcriber is None:
             self._start_worker([job])
         elif not self._transcriber.jobs.put(job):
             self._backlog.append(job)
-        self._show_queue()
+        self._sync_board()
         return True
 
     def _start_worker(self, jobs: list[_Job]) -> None:
@@ -1506,16 +2136,51 @@ class _Window(QWidget):
 
     def _waiting(self) -> list[Path]:
         """The recordings queued but not yet started, in order."""
-        queued = [] if self._transcriber is None else self._transcriber.jobs.waiting()
-        return queued + [job.wav for job in self._backlog]
+        return [job.wav for job in self._waiting_jobs()]
 
-    def _showing(self, wav: Path | None) -> bool:
-        """Whether recognition of this recording may draw on the clock and pane.
+    def _waiting_jobs(self) -> list[_Job]:
+        """The jobs queued but not yet started, in order."""
+        queued = [] if self._transcriber is None else self._transcriber.jobs.jobs()
+        return queued + list(self._backlog)
 
-        Only the recording in view, and never during a recording: the clock,
-        the meter and the pane then belong to the lecture being captured.
-        """
-        return wav is not None and wav == self._wav and not self._recording
+    def _sync_board(self) -> None:
+        """Bring the three columns into line with the queue."""
+        self._waiting_col.sync(
+            [
+                (job.wav, partial(self._job_card, job, working=False))
+                for job in self._waiting_jobs()
+            ]
+        )
+        working: list[tuple[Hashable, Callable[[], _JobCard]]] = []
+        current = self._current
+        job = None if current is None else self._queued.get(current)
+        if current is not None and job is not None:
+            working.append((current, partial(self._job_card, job, working=True)))
+        self._working_col.sync(working)
+        self._done_col.sync(
+            [(done.key, partial(self._done_card, done)) for done in self._finished]
+        )
+
+    def _job_card(self, job: _Job, *, working: bool) -> _JobCard:
+        """Build the card of a recording that is waiting or being decoded."""
+        language = dict(_LANGUAGES).get(job.language, job.language)
+        return _JobCard(
+            job.wav.parent.name,
+            f"{job.model}   ·   {language}   ·   {round(job.seconds / 60)} min",
+            right="starting" if working else "next",
+            progress=working,
+        )
+
+    def _done_card(self, done: _Done) -> _JobCard:
+        """Build the card of a recording the queue has finished with."""
+        card = _JobCard(
+            done.wav.parent.name,
+            done.note,
+            action="Try again" if done.problem else "Open transcript",
+            problem=done.problem,
+        )
+        card.opened.connect(lambda: self._open_done(done))
+        return card
 
     def _stop_transcription(self) -> None:
         """Give up the recording being recognised and every one still waiting."""
@@ -1526,93 +2191,59 @@ class _Window(QWidget):
         self._stopping_recognition = True
         self._transcriber.stop()
         left = f", {_plural(dropped, 'queued recording')} dropped" if dropped else ""
-        self._queue_line.setText(f"stopping recognition{left} ...")
+        self._working_col.set_subtitle(f"stopping recognition{left} ...")
+        self._sync_board()
         self._refresh()
-
-    def _show_queue(self, doing: str | None = None) -> None:
-        """Write the recognition line: what is happening, and how many wait.
-
-        Args:
-            doing: What the worker is doing now; ``None`` describes it from
-                the recording being decoded.
-        """
-        if self._transcriber is None and not self._backlog:
-            self._queue_line.setText("")
-            return
-        if doing is None:
-            doing = (
-                f"transcribing {self._current.parent.name}"
-                if self._current is not None
-                else "starting recognition ..."
-            )
-        waiting = len(self._waiting())
-        suffix = f"   ·   {waiting} waiting" if waiting else ""
-        self._queue_line.setText(f"{doing}{suffix}")
 
     def _on_staged(self, message: str) -> None:
         """Show what the worker is doing before decoding has begun."""
         if not self._stopping_recognition:
-            self._show_queue(message)
+            self._working_col.set_subtitle(message)
 
     def _on_began(self, wav: Path) -> None:
-        """Note which recording is being recognised now."""
+        """Move the recording now being recognised to the middle column."""
         self._current = wav
-        if self._showing(wav):
-            self._transcript.clear()
-        self._show_queue()
+        self._sync_board()
         self._refresh()
 
     def _on_decoding(self, decoding: Decoding) -> None:
-        """Show how far recognition has got, and the text as it arrives.
+        """Advance the card being decoded and the chip.
 
-        Reading can start immediately instead of after a wait that runs into
-        double digit minutes on a full lecture. What the pane shows here is
-        replaced by the finished transcript once the last segment is in.
+        No text is shown while it runs: the transcript is read once it is
+        written, so the card carries only how far it got.
         """
         if self._stopping_recognition or self._current is None:
             return
-        self._show_queue(
-            f"transcribing {self._current.parent.name}   ·   "
-            f"{decoding.fraction * 100:.0f}%   ·   "
-            f"{format_duration(decoding.remaining)} left"
-        )
-        if not self._showing(self._current):
-            return
-        self._clock.setText(format_duration(decoding.position))
-        self._meter.set_fraction(decoding.fraction)
-        self._chip.show_state(f"transcribing {decoding.fraction * 100:.0f}%")
-        self._levels.setText(
-            f"{decoding.fraction * 100:.0f}%   ·   "
-            f"{_plural(decoding.segments, 'segment')}   ·   "
-            f"{format_duration(decoding.remaining)} left"
-        )
-        # The end of the segment rather than its start: near enough for a
-        # preview the finished render is about to replace.
-        self._transcript.add_preview(
-            format_timecode(decoding.position).strip("[]"), decoding.text
-        )
+        self._working_col.set_subtitle("")
+        card = self._working_col.card(self._current)
+        if card is not None:
+            card.set_progress(
+                decoding.fraction,
+                f"{decoding.fraction * 100:.0f}% · "
+                f"{format_duration(decoding.remaining)} left",
+            )
+        if not self._recording:
+            self._chip.show_state(f"transcribing {decoding.fraction * 100:.0f}%")
 
     def _on_transcribed(
         self, wav: Path, path: Path, text: str, result: Transcription
     ) -> None:
-        """Show the finished transcript and how long decoding took.
+        """Move the card to Transcripts and say how long decoding took.
 
         The outcome goes on the status line even during a recording: the
         clock and the chip already say that one is running, while a finished
-        or failed transcript would otherwise go unseen.
+        transcript would otherwise go unseen.
         """
         self._current = None
-        if self._showing(wav):
-            self._meter.reset()
-            self._clock.setText(format_duration(result.audio_duration))
-            self._transcript.show_transcript(text)
-        message = (
-            f"wrote {_short_path(path)} · {_plural(len(result.segments), 'segment')} · "
-            f"{format_duration(result.decode_seconds)} "
-            f"({result.decode_ratio:.2f}x audio length)"
+        took = (
+            f"took {format_duration(result.decode_seconds)} "
+            f"({result.decode_ratio:.2f}x audio length)   ·   "
+            f"{_plural(len(result.segments), 'segment')}"
         )
-        self._say(message, path=path)
-        self._show_queue()
+        self._finish(wav, path, took, problem=False)
+        if self._pages.currentIndex() == _READER and wav == self._wav:
+            self._transcript.show_transcript(text)
+        self._say(f"wrote {_short_path(path)} · {took}", path=path)
         self._refresh()
 
     def _on_transcribe_stopped(self, message: str) -> None:
@@ -1630,12 +2261,24 @@ class _Window(QWidget):
 
     def _finish_one(self, message: str, *, problem: bool) -> None:
         """Clear the recording that ended without a transcript, and say why."""
-        if self._showing(self._current):
-            self._meter.reset()
+        if problem and self._current is not None:
+            self._finish(
+                self._current, None, "failed: see the line above", problem=True
+            )
         self._current = None
+        self._sync_board()
         self._say(message, problem=problem)
-        self._show_queue()
         self._refresh()
+
+    def _finish(
+        self, wav: Path, transcript: Path | None, note: str, *, problem: bool
+    ) -> None:
+        """Put a finished recording at the top of the Transcripts column."""
+        self._finished.insert(
+            0, _Done(self._next_key, wav, transcript, note, problem=problem)
+        )
+        self._next_key += 1
+        self._sync_board()
 
     def _release_transcriber(self) -> None:
         """Drop the finished worker, and start one for anything queued since.
@@ -1648,8 +2291,6 @@ class _Window(QWidget):
             self._transcriber.wait()
             self._transcriber = None
         if self._current is not None:
-            if self._showing(self._current):
-                self._meter.reset()
             self._say(
                 f"recognition of {self._current.parent.name} ended without "
                 "saying why; the recording itself is untouched and can be "
@@ -1659,6 +2300,7 @@ class _Window(QWidget):
             self._current = None
         self._transcribing = False
         self._stopping_recognition = False
+        self._working_col.set_subtitle("")
         if self._closing:
             self._backlog.clear()
         if self._backlog:
@@ -1666,7 +2308,7 @@ class _Window(QWidget):
             self._start_worker(jobs)
         elif self._recorder is None:
             self._let_sleep()
-        self._show_queue()
+        self._sync_board()
         self._refresh()
         if self._closing:
             # The window is already hidden and the worker is now finished, so
@@ -1702,16 +2344,12 @@ class _Window(QWidget):
         """Bring every control into line with what the window is doing."""
         free = self._recorder is None
         named = bool(self._course.text().strip())
-        self._record.setText("stop" if self._recording else "record")
-        self._record.setIcon(
-            _glyph("square", "#ffffff") if self._recording else _glyph("dot", _LIVE)
-        )
-        self._record.setProperty("live", self._recording)
-        _restyle(self._record)
+        self._record.set_live(self._recording)
         self._record.setEnabled(
             self._recording or (free and named and bool(self._devices))
         )
         self._mark.setEnabled(self._recording)
+        self._mark.setText(f"Mark · {len(self._marks)}" if self._recording else "Mark")
         self._open.setEnabled(free)
         self._text.setEnabled(
             free
@@ -1732,6 +2370,7 @@ class _Window(QWidget):
             self._chip.show_state("transcribing")
         else:
             self._chip.show_state("ready")
+            self._levels.setText(self._levels.text() or "not recording")
 
     def _say(
         self, message: str, *, problem: bool = False, path: Path | None = None
@@ -1843,6 +2482,25 @@ def run(config: Config) -> int:
     # Windows and X11 take the icon from the window itself.
     app.setWindowIcon(QIcon(str(ICON)))
     app.setStyle("Fusion")
+    # The palette covers what the stylesheet does not reach, such as the
+    # message boxes and the file dialog where Qt draws its own.
+    palette = QPalette()
+    for role, colour in (
+        (QPalette.ColorRole.Window, _BG),
+        (QPalette.ColorRole.WindowText, _TEXT),
+        (QPalette.ColorRole.Base, _RAISED),
+        (QPalette.ColorRole.AlternateBase, _SURFACE),
+        (QPalette.ColorRole.Text, _TEXT),
+        (QPalette.ColorRole.Button, _RAISED),
+        (QPalette.ColorRole.ButtonText, _TEXT),
+        (QPalette.ColorRole.Highlight, _ACCENT),
+        (QPalette.ColorRole.HighlightedText, _INK),
+        (QPalette.ColorRole.ToolTipBase, _RAISED),
+        (QPalette.ColorRole.ToolTipText, _TEXT),
+        (QPalette.ColorRole.PlaceholderText, _FAINT),
+    ):
+        palette.setColor(role, QColor(colour))
+    app.setPalette(palette)
     app.setStyleSheet(_STYLESHEET)
 
     font = QFont()
@@ -1958,13 +2616,6 @@ def _glyph(shape: Literal["dot", "square"], colour: str) -> QIcon:
         painter.end()
         icon.addPixmap(pixmap, mode)
     return icon
-
-
-def _track(label: QLabel, spacing: float) -> None:
-    """Letter-space a label, which Qt stylesheets cannot express."""
-    font = label.font()
-    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
-    label.setFont(font)
 
 
 def _short_path(path: Path) -> str:

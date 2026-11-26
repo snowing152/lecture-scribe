@@ -284,7 +284,7 @@ def test_the_language_starts_on_the_configured_one(
 ) -> None:
     window = _window(tmp_path)
 
-    assert window._language_box.currentText() == "Korean"
+    assert window._language_box.current_text() == "Korean"
     assert window._recognition_config().asr.language == "ko"
 
 
@@ -295,7 +295,7 @@ def test_the_chosen_language_is_the_one_recognised(
 ) -> None:
     window = _window(tmp_path)
 
-    window._language_box.setCurrentIndex(window._language_box.findText("English"))
+    window._language_box.select("en")
 
     assert window._recognition_config().asr.language == "en"
     # Chosen for this run only: the configuration itself is left alone.
@@ -462,7 +462,7 @@ def test_the_language_is_the_one_chosen_when_queued(
 ) -> None:
     window = _window(tmp_path)
     _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav")
-    window._language_box.setCurrentIndex(window._language_box.findText("English"))
+    window._language_box.select("en")
     _stop_recording(window, tmp_path / "lectures" / "b" / "b.wav")
     assert window._transcriber is not None
     jobs = window._transcriber.jobs
@@ -606,7 +606,7 @@ _OFFERED = (
 )
 
 
-def test_the_model_list_shows_each_note_and_starts_on_the_configured_one(
+def test_the_model_list_starts_on_the_configured_one_with_its_note(
     app: QApplication,  # noqa: ARG001
     devices: _Devices,  # noqa: ARG001
     tmp_path: Path,
@@ -615,8 +615,9 @@ def test_the_model_list_shows_each_note_and_starts_on_the_configured_one(
 
     window = gui._Window(config)
 
-    shown = [window._model_box.itemText(i) for i in range(window._model_box.count())]
-    assert shown == ["large-v3  ·  default", "buzz  ·  Korean-tuned"]
+    assert window._model_box.texts() == ["large-v3", "buzz"]
+    # The note of the model in use is shown beside the list, not hidden in it.
+    assert window._model_note.text() == "default"
     assert window._recognition_config().asr.model == "large-v3"
 
 
@@ -645,7 +646,7 @@ def test_a_recording_is_queued_with_the_model_chosen_then(
 ) -> None:
     config = Config(output=OutputConfig(dir=tmp_path / "lectures"), models=_OFFERED)
     window = gui._Window(config)
-    window._model_box.setCurrentIndex(window._model_box.findData("buzz"))
+    window._model_box.select("buzz")
 
     _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav")
     assert window._transcriber is not None
