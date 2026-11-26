@@ -28,11 +28,13 @@ one core.
 - **The window is a second front end, never the only one.** `cli.py` and
   `gui.py` are peers: everything the window does stays reachable from the
   command line, and neither holds logic the other needs.
-- **The window is dark, greys plus two signal colours**, changed from greys
-  only on 2026-09-28. Red means a recording is live, amber means a mark.
-  Colour carries meaning, never decoration, and there is no light theme.
-  Qt's Fusion style is forced on both platforms, since the native styles are
-  too far apart for one stylesheet.
+- **The window is dark: warm greys after Monokai Pro, with four colours that
+  each mean one thing** (D-30, 2026-11-27; greys plus red and amber before).
+  Yellow is what can be pressed or is in progress, pink-red a recording that
+  is live, orange a mark, green done. Colour carries meaning, never
+  decoration, and there is no light theme. Qt's Fusion style is forced on
+  both platforms, since the native styles are too far apart for one
+  stylesheet.
 - **Audio files are never deleted or overwritten automatically.** A recording
   cannot be recreated; recognition can be repeated as often as wanted.
 - **Do not swap `soundcard` for `sounddevice`** — `WasapiSettings` has no
@@ -159,8 +161,6 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   `format_text._wrap` wraps by `east_asian_width` instead. Cost: about one
   and a half times the lines (280 -> 434 on a real 컴넷 transcript), so a
   phrase of several words meets a line break more often under `grep`.
-- Qt stylesheets have no `letter-spacing`; it only exists as
-  `QFont.setLetterSpacing`, hence `_track()`.
 - Frozen dataclasses cross `QThread` signal boundaries intact and arrive on
   the GUI thread. `Progress`, `Recording` and `Transcription` are passed
   whole rather than unpacked into primitives.
@@ -373,3 +373,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |
 | Q | transcription queue in the window: record the next lecture while earlier ones are recognised | built 2026-11-27, tests pass; not yet run by hand -- see D-27 |
 | W | model list in the window from `[models]`, each with a note; `--model` takes the same names | built 2026-11-27, tests pass; not yet run by hand -- see D-28 |
+| D | window redesign: options bar, recording strip with a live waveform, the queue as three animated columns, a reading view | step 1 built 2026-11-27, tests pass; not yet run by hand -- see D-30 |

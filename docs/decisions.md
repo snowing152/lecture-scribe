@@ -276,3 +276,29 @@ silence threshold cannot see. A run of ten numbers or more separated by
 commas or full stops is now cut from the segment, and the rest kept, since
 that segment began and ended in the lecturer's words. Ten, because a
 lecturer listing scenarios or packets says five or six.
+
+### D-30 · 2026-11-27 · active: The window is redesigned around the queue
+
+The window had grown one control at a time down a single column. Three
+directions were mocked up as interactive pages; the user chose the one with
+the queue as a pipeline, and its colours after Monokai Pro. Settled with the
+user point by point:
+- **Layout:** a bar of options (course, device, language and model as pills,
+  the model's note beside it), a recording strip (record button that pulses
+  while live, clock, the last ten seconds of real levels, mark), the status
+  line, then the queue as three columns: Waiting, Transcribing, Transcripts.
+  Below 900 px the columns stack.
+- **Colours** each mean one thing: yellow what can be pressed or is in
+  progress, pink-red a live recording, orange a mark, green done. Dark only.
+- **No live text while decoding**: the user rarely reads transcripts, so the
+  card shows progress, and a transcript is read in a view that takes the
+  place of the columns, with a way back.
+- **Animations** run only while something moves: a card unfolds and fades in
+  where it arrives, the progress stripes move while a recording is decoded,
+  the record button pulses while live. An idle window redraws nothing.
+- **System fonts** only; no font files in the repository.
+- **Step 2, still to come:** the Transcripts column lists every lecture in
+  the folder with search, recordings without a transcript get a Transcribe
+  button, marks become jump links in the reading view, and `scribe list`
+  prints the same list from a new `library.py`.
+

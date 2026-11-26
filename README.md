@@ -155,35 +155,37 @@ and open a new window.
 ## Using the window
 
 <p align="center">
-  <img src="./.github/assets/window-transcript.png" alt="a finished transcript in the window">
+  <img src="./.github/assets/window-queue.png" alt="the window recording one lecture while the queue transcribes others">
 </p>
+
+From top to bottom: the **options** (course, device, language, model), the
+**recording strip**, a status line, and the **queue** in three columns.
 
 1. **Start the lecture** playing.
 2. **Type a course name** (for example `os`). It names the folder the
    recording goes into.
-3. Press **record**. The status chip turns red and says `recording`, and the
-   meter shows the sound level.
-4. Press **mark** (<kbd>Ctrl</kbd>+<kbd>M</kbd>) whenever something is worth
-   finding again, such as "this will be on the exam". Marked paragraphs show
-   in amber. Each mark is saved beside the recording as you press it.
-5. Check **Language** before you stop: Korean, or English for a lecture
-   given in English. The recording is queued with the language shown at that
-   moment.
-6. Press **stop** when the lecture ends. The recording goes straight into the
-   transcription queue: the meter turns into a progress bar and the text
-   appears in the pane as it is recognised, so you can start reading straight
-   away.
-7. **Record the next lecture whenever you like.** Recognition carries on in
-   the line under the status, `transcribing ... · 43% · 2 waiting`, and works
-   through the recordings one after another.
+3. Check **Language** and **Model**. The chosen model's note says what it is
+   good at. Both are fixed for a recording the moment you press stop.
+4. Press **Record**. It turns pink-red and pulses, and the waveform beside
+   the clock shows the last ten seconds of sound: a flat line means nothing
+   is reaching the recording.
+5. Press **Mark** (<kbd>Ctrl</kbd>+<kbd>M</kbd>) whenever something is worth
+   finding again, such as "this will be on the exam". Each mark is saved
+   beside the recording as you press it, and its paragraph gets `>>>`.
+6. Press **Stop** when the lecture ends. A card for it appears under
+   **Waiting**, moves to **Transcribing** with a progress bar, and ends up
+   under **Transcripts**.
+7. **Record the next lecture whenever you like.** The queue works through the
+   recordings one after another meanwhile.
 
-| button | shortcut | what it does |
+| control | shortcut | what it does |
 |---|---|---|
-| **record** / **stop** | | start and finish a recording |
-| **mark** | <kbd>Ctrl</kbd>+<kbd>M</kbd> | flag this moment; the paragraph gets `>>>` in the file |
-| **transcribe** | | queue the recording in view, such as one you opened |
-| **stop** (by the queue line) | | stop recognition and clear the queue; the recordings stay on disk |
-| **open** | <kbd>Ctrl</kbd>+<kbd>O</kbd> | pick an earlier recording, or any WAV file; its marks come with it |
+| **Record** / **Stop** | | start and finish a recording |
+| **Mark** | <kbd>Ctrl</kbd>+<kbd>M</kbd> | flag this moment; the paragraph gets `>>>` in the file |
+| **Stop all** (Transcribing) | | stop recognition and clear the queue; the recordings stay on disk |
+| **Open transcript** (a card) | | read it in place of the queue; **← Back to queue** returns |
+| **Open file…** (Transcripts) | <kbd>Ctrl</kbd>+<kbd>O</kbd> | pick an earlier recording, or any WAV file; its marks come with it |
+| **Transcribe** (reading view) | | queue the recording you are reading |
 
 Good to know:
 
@@ -191,8 +193,8 @@ Good to know:
   runs, so you can walk away from a long lecture. It goes back to normal as
   soon as the work ends.
 - **Opening an old recording** shows its transcript if one already exists.
-  Press **transcribe** to queue a fresh one. **open** works while recognition
-  runs, but not during a recording.
+  Press **Transcribe** to queue a fresh one. **Open file…** works while
+  recognition runs, but not during a recording.
 - **Stopping a transcription halfway writes nothing**, because half a lecture
   would look like a whole one. Closing the window during a transcription
   asks you first; recordings still waiting stay untranscribed, and
@@ -208,7 +210,8 @@ Good to know:
   set `language = "en"` there.
 - **Copying**: select all, then copy, and you get the text exactly as it is in
   the `.txt` file.
-- Colours mean something: **red** means recording, **amber** means a mark.
+- Colours mean something: **yellow** is what you can press or what is in
+  progress, **pink-red** means recording, **orange** a mark, **green** done.
 
 ## What you get
 
