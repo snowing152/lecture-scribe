@@ -458,6 +458,80 @@ def test_transcribe_passes_the_fixed_decoding_settings(tmp_path: Path) -> None:
     assert call["vad_filter"] is True
     assert call["vad_parameters"] == {"min_silence_duration_ms": 500}
     assert call["condition_on_previous_text"] is False
+    assert call["word_timestamps"] is True
+    assert call["hallucination_silence_threshold"] == pytest.approx(2.0)
+
+
+_HOTWORDS = (
+    "프로토콜 패킷 데이터그램 인캡슐레이션 스루풋 TCP UDP hop-to-hop end-to-end "
+    "duplicate cumulative Go-Back-N Selective Repeat additional"
+)
+
+
+def _kept_texts(tmp_path: Path, texts: list[str], hotwords: str) -> list[str]:
+    wav = tmp_path / "audio.wav"
+    wav.touch()
+    model = _FakeModel(
+        segments=[
+            _FakeRawSegment(float(i), float(i) + 1.0, text, -0.2)
+            for i, text in enumerate(texts)
+        ],
+        duration=float(len(texts)),
+    )
+    result = transcribe(model, wav, language="ko", beam_size=5, hotwords=hotwords)
+    return [segment.text for segment in result.segments]
+
+
+def test_the_hotword_list_read_back_is_dropped(tmp_path: Path) -> None:
+    # Both seen on 컴넷 6-2: the tail of the list, and a stretch of it with
+    # two terms merged into a word that is on no list.
+    tail = "duplicate cumulative Go-Back-N Selective Repeat additional"
+    merged = "데이터그램 인캡슐레이션 스루풋 TCP UDP hop-to-end"
+
+    kept = _kept_texts(tmp_path, ["앞 문장입니다.", tail, merged, "뒤 문장"], _HOTWORDS)
+
+    assert kept == ["앞 문장입니다.", "뒤 문장"]
+
+
+def test_speech_that_uses_the_terms_is_kept(tmp_path: Path) -> None:
+    texts = [
+        "TCP는 패킷을 다시 보내는 Go-Back-N 방식을 씁니다",
+        "TCP UDP 프로토콜",  # a short run of terms is the lecturer naming them
+        "Duplicate, cumulative, additional? 그렇죠",
+    ]
+
+    assert _kept_texts(tmp_path, texts, _HOTWORDS) == texts
+
+
+def test_nothing_is_dropped_without_hotwords(tmp_path: Path) -> None:
+    tail = "duplicate cumulative Go-Back-N Selective Repeat additional"
+
+    assert _kept_texts(tmp_path, [tail], "") == [tail]
+
+
+def test_a_dropped_echo_is_not_shown_as_progress(tmp_path: Path) -> None:
+    wav = tmp_path / "audio.wav"
+    wav.touch()
+    echo = "duplicate cumulative Go-Back-N Selective Repeat additional"
+    model = _FakeModel(
+        segments=[
+            _FakeRawSegment(0.0, 1.0, echo, -0.2),
+            _FakeRawSegment(1.0, 2.0, "말", -0.2),
+        ],
+        duration=2.0,
+    )
+    seen: list[Decoding] = []
+
+    transcribe(
+        model,
+        wav,
+        language="ko",
+        beam_size=5,
+        hotwords=_HOTWORDS,
+        on_progress=seen.append,
+    )
+
+    assert [decoding.text for decoding in seen] == ["말"]
 
 
 @pytest.mark.parametrize(
@@ -735,3 +809,28 @@ def test_a_folder_transcript_does_not_cover_a_second_recording(
     # Neither owns the folder's transcript, so both are handed on, where the
     # check for a shared transcript says what to do about them.
     assert _ready(tmp_path) == [first, second]
+
+
+def test_whisper_counting_is_cut_and_the_speech_around_it_kept(tmp_path: Path) -> None:
+    # Shortened from 컴넷 6-2, 28:18: the lecturer's own words on both sides.
+    counted = ", ".join(str(n) for n in range(1, 41))
+    texts = [
+        f"이야기를 시나리오 {counted}, 라우터 하나 무한대의 버퍼",
+        ",".join(str(n) for n in range(1, 20)) + " X",
+    ]
+
+    kept = _kept_texts(tmp_path, texts, "")
+
+    assert kept == ["이야기를 시나리오 라우터 하나 무한대의 버퍼", "X"]
+
+
+def test_a_segment_that_was_only_counting_is_dropped(tmp_path: Path) -> None:
+    counted = ", ".join(str(n) for n in range(1, 30))
+
+    assert _kept_texts(tmp_path, [counted, "말"], "") == ["말"]
+
+
+def test_a_short_run_of_numbers_is_speech(tmp_path: Path) -> None:
+    texts = ["시나리오 1, 2, 3, 4, 5 이렇게 있습니다", "패킷 0, 1, 2, 3 4개를 받았다"]
+
+    assert _kept_texts(tmp_path, texts, "") == texts

@@ -7,6 +7,7 @@ since loading alone can take longer than transcribing a short recording.
 
 import ctypes
 import os
+import re
 import threading
 import time
 from collections import Counter
@@ -34,6 +35,38 @@ _STILL_WRITING_SECONDS = 30.0
 A recording writes a block every 64 ms, so a live one is never more than a
 fraction of a second old; a recording killed outright stops being written
 and is picked up half a minute later.
+"""
+
+
+_HALLUCINATION_SILENCE_SECONDS = 2.0
+"""Pause around a suspect segment that lets the decoder skip it and retry.
+
+Measured on the 컴넷 6-2 lecture: without it, two minutes of real speech came
+out as Whisper counting "1, 2, 3 ... 59", and unclear audio came out as the
+hotword list itself. With it, both were gone, at twice the decoding time.
+"""
+
+_ECHO_MIN_WORDS = 5
+"""Shortest segment that can count as the hotword list read back.
+
+Below this, a run of terms is as likely to be the lecturer naming them.
+"""
+
+_ECHO_SHARE = 0.8
+"""Share of a segment's words that must be hotwords for it to be an echo.
+
+Not all of them: the echo seen on 컴넷 6-2 merged `hop-to-hop end-to-end`
+into `hop-to-end`, a word that is on no list.
+"""
+
+_ECHO_PUNCTUATION = ".,!?;:\"'()[]"
+
+_COUNTING = re.compile(r"(?:\d+\s*[,.]\s*){9,}\d+[,.]?")
+"""Ten numbers or more in a row: Whisper counting, not the lecturer.
+
+Seen twice on 컴넷 6-2, over a minute of real speech each time, as
+`1, 2, 3 ... 59` with repeats, and once run together as `1,2,3,...`. Five or
+six in a row, `시나리오 1, 2, 3, 4, 5`, are left alone.
 """
 
 
@@ -393,6 +426,12 @@ def transcribe(
     switched off on purpose: on a 90 minute recording, one wrong segment would
     otherwise keep dragging the same error into every segment after it.
 
+    Word timestamps are on only so that ``hallucination_silence_threshold``
+    can work: it needs to know where the words sit to find a segment
+    surrounded by silence, which is where Whisper invents text. A segment
+    that is nothing but the hotword list read back is dropped, since the
+    decoder echoes its prompt on audio it cannot make out.
+
     Args:
         model: A model from :func:`load_model`.
         wav: Recording to transcribe.
@@ -425,6 +464,7 @@ def transcribe(
     start = time.monotonic()
     segments: list[Segment] = []
     interrupted: str | None = None
+    hotword_set = _hotword_set(hotwords)
     try:
         raw_segments, info = model.transcribe(
             str(wav),
@@ -434,6 +474,8 @@ def transcribe(
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
             hotwords=hotwords.strip() or None,
+            word_timestamps=True,
+            hallucination_silence_threshold=_HALLUCINATION_SILENCE_SECONDS,
         )
         # The length is known before any segment is decoded, which is what
         # makes progress reportable at all.
@@ -442,11 +484,17 @@ def transcribe(
             segment = Segment(
                 start=raw.start,
                 end=raw.end,
-                text=raw.text.strip(),
+                text=_without_counting(raw.text),
                 avg_logprob=raw.avg_logprob,
             )
-            segments.append(segment)
-            if on_progress is not None:
+            kept = bool(segment.text) and not _is_hotword_echo(
+                segment.text, hotword_set
+            )
+            if kept:
+                segments.append(segment)
+            # A dropped echo is not reported either, or the live preview
+            # would show the very text the transcript leaves out.
+            if kept and on_progress is not None:
                 on_progress(
                     Decoding(
                         position=segment.end,
@@ -480,6 +528,41 @@ def transcribe(
         decode_seconds=time.monotonic() - start,
         interrupted=interrupted,
     )
+
+
+def _without_counting(text: str) -> str:
+    """Cut a run of numbers Whisper counted out, keeping the speech around it.
+
+    Only the run goes, not the segment: the one seen on 컴넷 6-2 began with
+    the lecturer's own `시나리오 1, 2,` and ended in real speech about the
+    router.
+    """
+    return " ".join(_COUNTING.sub(" ", text).split())
+
+
+def _normalise_word(word: str) -> str:
+    return word.strip(_ECHO_PUNCTUATION).casefold()
+
+
+def _hotword_set(hotwords: str) -> frozenset[str]:
+    return frozenset(
+        word for word in (_normalise_word(w) for w in hotwords.split()) if word
+    )
+
+
+def _is_hotword_echo(text: str, hotwords: frozenset[str]) -> bool:
+    """Whether a segment is the hotword list read back rather than speech.
+
+    Real Korean speech attaches particles to a term (`TCP는`, `패킷을`), so a
+    long run of bare listed words in a row is the prompt, not the lecturer.
+    """
+    if not hotwords:
+        return False
+    words = [word for word in (_normalise_word(w) for w in text.split()) if word]
+    if len(words) < _ECHO_MIN_WORDS:
+        return False
+    listed = sum(word in hotwords for word in words)
+    return listed >= _ECHO_SHARE * len(words)
 
 
 def transcript_path(wav: Path) -> Path:
