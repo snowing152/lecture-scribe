@@ -194,11 +194,17 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   with the status line still saying `ready` -- and the next press started a
   second recording into a new folder.
 - **A worker's result arrives before its thread has finished.** Freeing the
-  model still runs after `transcribed`, so the window counts as busy until
-  the `finished` slot has dropped the worker (`_busy()`), not until the
-  result. Starting the next job in that gap would replace a running
-  `QThread`, which aborts the process, and the stale `finished` would
-  release the new job's keep-awake.
+  model still runs after `transcribed`. Starting the next job in that gap
+  would replace a running `QThread`, which aborts the process, and the stale
+  `finished` would release the new job's keep-awake. So the transcription
+  worker is never replaced while it exists: a recording stopped meanwhile
+  joins its `_JobQueue`, and once the worker has found that queue empty the
+  queue refuses new work, which waits in `_backlog` for the `finished` slot
+  to start a worker of its own.
+- **Recording and recognition overlap; one keep-awake covers both.** Each
+  `finished` slot lets the desktop sleep only when the other worker is gone.
+  A recording is queued the moment it stops, with the language shown then
+  (`_Job.language`), so the language box no longer applies after the fact.
 - Wayland pairs a window with its menu entry by name, not by process: the
   entry's `StartupWMClass` and `QApplication.setDesktopFileName` both say
   `launcher.DESKTOP_ID`, or the window appears without its icon.
@@ -248,6 +254,32 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 - **`asr.hotwords` is empty by default and a nudge, not a fix.** Set, it goes
   to faster-whisper as `hotwords`, never as `initial_prompt`, which would
   reach only the first window with the previous text off (D-25).
+- **An English hotword pulls the speech around it into Latin letters.**
+  With `duplicate cumulative additional flow control` added, 8 minutes of
+  컴넷 6-2 grew invented spellings -- `peculiose` for `패킷 로스`,
+  `end-shaking` for handshaking -- that the Korean-only list never made.
+  Listing a term as it should appear fixed both: `패킷 로스` in Hangul,
+  `congestion control` in Latin. One sample.
+- **A run of ten numbers or more is cut from a segment** (`_without_counting`),
+  the rest of the segment kept; a segment left empty is dropped. This is
+  what finally removes the counting below; five or six numbers in a row
+  (`시나리오 1, 2, 3, 4, 5`) are speech and stay (D-26).
+- **D-26 does not stop the counting for good.** With the hotword list of
+  2026-11-27, `large-v3` counted "3, 4, 5 ... 59" over 28:18-29:27 of 컴넷
+  6-2 again, inside a run of speech where the silence threshold cannot
+  reach. `buzz-korean` did not, but skipped the 47 seconds instead.
+- **`word_timestamps=True`, `hallucination_silence_threshold=2.0`** (D-26).
+  The first exists only so the second can see where the words sit and skip
+  a suspect segment surrounded by silence. On 컴넷 6-2 it removed two minutes
+  of Whisper counting "1, 2, 3 ... 59" over real speech, and every case of
+  the hotword list read back as text. Cost: the 50 minute lecture in 5.0
+  minutes on the GPU instead of about 2.5; the CPU is unmeasured.
+- **A segment that is the hotword list read back is dropped**
+  (`_is_hotword_echo`): five words or more, at least 80% of them listed. On
+  audio it cannot make out, the decoder echoes its prompt verbatim --
+  `데이터그램 프레임 인캡슐레이션 스루풋 ...` -- and the silence threshold
+  above does not catch an echo that is not between pauses (39:21 of 6-2).
+  Real speech attaches particles (`TCP는`), so it rarely looks like that.
 
 - **The language is always named, never auto detected.** `ko` by default;
   the window offers Korean and English, `scribe text --language` takes any
@@ -266,6 +298,19 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   peaks at 3365 MiB on the 81 minute lecture, so the headroom is real.
 
 ## Non-obvious facts about speed and the GPU, measured on this machine
+
+- **Eight minute slices lie about speed.** On three of them `buzz-korean`
+  decoded in 124 s against 234 s for `large-v3`; on whole lectures it was
+  the slower one, 1.5 to 1.9 times (6-2: 713 s against 386 s). Measure
+  speed on a whole lecture.
+- **Korean fine-tunes, compared 2026-11-27 (D-28).** `buzz-korean`
+  (`BuzzASR/korean`, converted with `ct2-transformers-converter`) found 4-15%
+  more words on four lectures and kept 20-40% more English terms in Latin.
+  `ghost613/faster-whisper-large-v3-turbo-korean` writes invented news on
+  lecture audio (`...연기한다고 말했다`). Plain `large-v3-turbo` loops
+  (`라우터 링크 카페스티트는 R` four times) and spells terms in Hangul.
+  A converted model needs `tokenizer.json` and `preprocessor_config.json`
+  copied in with `--copy_files`; the converter writes neither by itself.
 
 - **The decoder scans the whole file before yielding a segment.** 21 seconds
   on the 81 minute lecture: `model.transcribe()` decodes the audio and runs
@@ -303,8 +348,9 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   `scribe` on the PATH is the second one, and installing the extra into the
   first changes nothing for the window. `scribe doctor` prints `sys.prefix`
   for exactly this reason.
-- Measured on the RTX 4060 Laptop: 21x realtime, the 81 minute lecture in
-  3.9 minutes against 23 on the CPU. Same words -- 95.4% agreement by word
+- Measured on the RTX 4060 Laptop, before D-26: 21x realtime, the 81 minute
+  lecture in 3.9 minutes against 23 on the CPU. Since D-26 about 10x on the
+  GPU (50 minutes in 5.0). Same words -- 95.4% agreement by word
   with the CPU transcript, the differences being spacing and dropped full
   stops.
 
@@ -325,3 +371,5 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | F | `scribe text <folder>`: every recording under it without a transcript, any case of `.wav`, skipping one written to in the last 30 s | done |
 | H | `asr.hotwords` / `scribe text --hotwords`: terms of the course as a decoding hint | done — measured once, see below |
 | M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |
+| Q | transcription queue in the window: record the next lecture while earlier ones are recognised | built 2026-11-27, tests pass; not yet run by hand -- see D-27 |
+| W | model list in the window from `[models]`, each with a note; `--model` takes the same names | built 2026-11-27, tests pass; not yet run by hand -- see D-28 |

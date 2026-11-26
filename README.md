@@ -125,7 +125,7 @@ This only looks around and writes nothing. It should show:
   `org.freedesktop.ScreenSaver` on Linux.
 
 Then do a test run: play any video, start `uv run scribe gui`, record half a
-minute, press **stop**, then **transcribe**.
+minute and press **stop**; the recording is transcribed by itself.
 
 > [!IMPORTANT]
 > The first transcription downloads the speech model, about **3 GB**, so give
@@ -166,18 +166,23 @@ and open a new window.
 4. Press **mark** (<kbd>Ctrl</kbd>+<kbd>M</kbd>) whenever something is worth
    finding again, such as "this will be on the exam". Marked paragraphs show
    in amber. Each mark is saved beside the recording as you press it.
-5. Press **stop** when the lecture ends.
-6. Check **Language**: Korean, or English for a lecture given in English.
-   It only matters for the next step, so you can change it after recording.
-7. Press **transcribe**. The meter turns into a progress bar and the text
+5. Check **Language** before you stop: Korean, or English for a lecture
+   given in English. The recording is queued with the language shown at that
+   moment.
+6. Press **stop** when the lecture ends. The recording goes straight into the
+   transcription queue: the meter turns into a progress bar and the text
    appears in the pane as it is recognised, so you can start reading straight
    away.
+7. **Record the next lecture whenever you like.** Recognition carries on in
+   the line under the status, `transcribing ... · 43% · 2 waiting`, and works
+   through the recordings one after another.
 
 | button | shortcut | what it does |
 |---|---|---|
 | **record** / **stop** | | start and finish a recording |
 | **mark** | <kbd>Ctrl</kbd>+<kbd>M</kbd> | flag this moment; the paragraph gets `>>>` in the file |
-| **transcribe** | | turn the recording into text; becomes **stop** while it runs |
+| **transcribe** | | queue the recording in view, such as one you opened |
+| **stop** (by the queue line) | | stop recognition and clear the queue; the recordings stay on disk |
 | **open** | <kbd>Ctrl</kbd>+<kbd>O</kbd> | pick an earlier recording, or any WAV file; its marks come with it |
 
 Good to know:
@@ -186,10 +191,12 @@ Good to know:
   runs, so you can walk away from a long lecture. It goes back to normal as
   soon as the work ends.
 - **Opening an old recording** shows its transcript if one already exists.
-  Press **transcribe** to make a fresh one.
+  Press **transcribe** to queue a fresh one. **open** works while recognition
+  runs, but not during a recording.
 - **Stopping a transcription halfway writes nothing**, because half a lecture
   would look like a whole one. Closing the window during a transcription
-  asks you first.
+  asks you first; recordings still waiting stay untranscribed, and
+  `scribe text` on their folder picks them up later.
 - **There is no automatic language.** The model would guess once from the
   first half minute and keep that guess for the whole lecture, and a wrong
   guess spoils all of it. A Korean lecture transcribed as English comes out
@@ -242,10 +249,12 @@ accurate, but slower:
 
 | an 81 minute lecture | time to transcribe |
 |---|---|
-| processor only | about 23 minutes |
-| NVIDIA RTX 4060 Laptop | about 4 minutes |
+| processor only | about 23 minutes, measured before the hallucination check; now likely longer |
+| NVIDIA RTX 4060 Laptop | about 8 minutes |
 
-<sub>Measured on one laptop. A slower processor takes longer.</sub>
+<sub>Measured on one laptop: 50 minutes took 5 on the card. The check that
+keeps the model from inventing text where it hears none roughly doubled the
+time. A slower processor takes longer.</sub>
 
 To use the card:
 
@@ -341,7 +350,8 @@ work as they are.
 | `audio.device` | `"auto"` | part of the output device's name, or `"auto"` for the current one |
 | `audio.sample_rate` | `16000` | recording rate in Hz |
 | `audio.silence_rms` | `0.001` | level below which sound counts as silence |
-| `asr.model` | `"large-v3"` | which faster-whisper model to use |
+| `asr.model` | `"large-v3"` | which faster-whisper model to use: a name, a model folder, or a name from `[models]` |
+| `[models.<name>]` | one, `large-v3` | models the window lists under **Model**, each with `model` (name or folder) and a one-line `note` |
 | `asr.gpu` | `false` | use an NVIDIA card; see [above](#faster-with-an-nvidia-card) |
 | `asr.language` | `"ko"` | spoken language the window starts on, such as `"ko"` or `"en"`; never auto-detected |
 | `asr.beam_size` | `5` | how many alternatives the model weighs |
@@ -361,6 +371,55 @@ written as they are spelled, where otherwise they might come out as `FIFA` or
 `Rated Fair Queen`. It is only a nudge: the model may also write a listed word
 where nothing like it was said, and it may cut a stretch of filler. Try it on
 one lecture and compare before making it a habit. Leave it empty for no hint.
+
+Write each term the way you want to read it. A lecturer who says `패킷 로스`
+is best served by `패킷 로스` in the list: English words there make the model
+spell nearby Korean speech in Latin letters as well, and it invents words such
+as `peculiose` for it. Use English only for terms the slides spell in English.
+
+</details>
+
+<details>
+<summary>Choosing a model, and the Korean one</summary>
+<br>
+
+The **Model** list in the window shows each entry of `[models]` with its
+note, and a recording is transcribed with the model shown when it was
+queued. `scribe text --model buzz-korean` does the same from a terminal.
+
+Measured on four lectures of one course (2026-11-27), against `large-v3`:
+
+| | `large-v3` | `buzz-korean` |
+|---|---|---|
+| speech recognised (words) | baseline | 4 to 15% more |
+| English terms kept in Latin letters | baseline | about 20 to 40% more |
+| the model counting "1, 2, 3 ..." | once, over a minute of speech | never |
+| time for a 50 minute lecture on the RTX 4060 | 6.4 minutes | 11.9 minutes |
+
+Neither is free of mistakes, and four lectures are one course. Read the
+same lecture from both before switching.
+
+`buzz-korean` is [`BuzzASR/korean`](https://huggingface.co/BuzzASR/korean)
+(MIT licence), a Korean fine-tune of large-v3. It is published for
+Transformers only, so it has to be converted once. The converter needs
+PyTorch, about 2 GB, which `uvx` installs in a throwaway environment rather
+than in this project:
+
+```bash
+uvx --python 3.12 --from "ctranslate2==4.*" --with transformers --with torch \
+  ct2-transformers-converter --model BuzzASR/korean \
+  --output_dir ~/.cache/lecture-scribe/models/buzz-korean \
+  --quantization float16 --copy_files tokenizer.json preprocessor_config.json
+```
+
+The two `--copy_files` matter: without its own `tokenizer.json`,
+faster-whisper falls back to a generic one. Then add it to `config.toml`:
+
+```toml
+[models.buzz-korean]
+model = "~/.cache/lecture-scribe/models/buzz-korean"
+note = "Korean-tuned; more speech, English terms kept; slower"
+```
 
 </details>
 

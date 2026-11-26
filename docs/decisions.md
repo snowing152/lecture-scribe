@@ -58,7 +58,7 @@ Unknown keys are an error. Since 2026-11-09, out-of-range values are too.
 **Why:** a typo should not silently fall back to a default. This is also why
 the menu entry pins `Path=` (D-14).
 
-### D-9 · 2026-09-10 · active, refined by D-21 and D-25: Recognition settings
+### D-9 · 2026-09-10 · active, refined by D-21, D-25 and D-26: Recognition settings
 
 `vad_filter=True` with 500 ms silence, `condition_on_previous_text=False`,
 `int8_float16` on GPU and `int8` on CPU.
@@ -200,3 +200,79 @@ terms to lean towards. Empty by default, so nothing changes unless it is set.
 **Measured once** on 10 minutes of one lecture: technical terms came out
 right, a little filler was cut, segments halved. See `CLAUDE.md`. Anyone
 setting it should compare on one lecture first.
+
+### D-26 · 2026-11-26 · active: Skip hallucinations between pauses, drop hotword echoes
+
+Two failures in the 컴넷 6-2 lecture, both over audible speech: from 28:07
+the decoder counted "1, 2, 3 ... 59" for about 80 seconds, and on unclear
+audio it wrote out the hotword list itself.
+- **`word_timestamps=True` with `hallucination_silence_threshold=2.0`** is
+  added to D-9's fixed settings. Compared on eight minutes around the fault,
+  against the current settings, a longer hotword list, `repetition_penalty`
+  1.1 and a stricter VAD: only this one removed both the counting and the
+  echo, and on a clean eight minutes from 5-2 it changed nothing for the
+  worse. The stricter VAD produced Greek and Turkish fragments instead.
+  Confirmed on the whole of 6-2.
+- **Echoes are dropped after decoding**, since the silence threshold missed
+  one that was not between pauses: a segment of five words or more, 80% of
+  them hotwords. Not 100%, because the echo merges neighbouring terms.
+- **Cost accepted by the user:** decoding takes twice as long, 5.0 minutes
+  for 50 minutes on the GPU. Retries on bad audio are what it pays for.
+Measured once, on one lecture. The counting fault itself is fragile: cut
+from the file at a different offset, the same audio decoded cleanly.
+
+### D-27 · 2026-11-27 · active: The window queues recordings and recognises them one by one
+
+The user sat waiting for each transcription before recording the next
+lecture. Recording needs almost no processor and decoding runs on the GPU,
+so the two now overlap in the window. Settled with the user one by one:
+- **The window only.** The CLI already did this with two terminals, or with
+  `scribe text <folder>` once at the end (step F).
+- **A recording is queued the moment it stops**, unless it is silent;
+  **transcribe** queues the recording in view, such as one opened.
+- **One after another, one model for the whole queue.** Two copies would fit
+  in 8 GB but decode slower each and leave little margin.
+- **The language is fixed when a recording is queued.** The course, device
+  and language fields are locked only while recording.
+- **Recognition gets a line of its own** under the status line; the clock,
+  meter and pane belong to a recording whenever one runs.
+- **stop clears the whole queue**; closing asks first and drops it. The
+  recordings stay on disk for `scribe text`.
+- **No automatic queue of old recordings at startup**, and no notification
+  when a transcript is ready, for now.
+- **A failed recording does not end the queue**, except a GPU that cannot
+  decode or a model that cannot load, which would fail every one in turn.
+
+### D-28 · 2026-11-27 · active: Models are offered by name, with a note on each
+
+The user asked for a Korean model, and for the window to say which model
+suits what. Measured first, on the user's own lectures rather than on the
+read speech the model cards report:
+- **Four candidates on three eight minute slices:** `large-v3`,
+  `BuzzASR/korean` (a large-v3 fine-tune, MIT, converted once with
+  `uvx` so that PyTorch never enters the project), `ghost613`'s Korean
+  turbo and plain `large-v3-turbo`. The last two were dropped: one invents
+  news, the other loops and spells English terms in Hangul.
+- **Then whole lectures:** `large-v3` on all nine, `buzz-korean` on four
+  (2-1, 2-2, 5-1, 6-2) before the user stopped the rest for time.
+  `buzz-korean`: 4-15% more words, 20-40% more English terms in Latin, no
+  counting, 1.5-1.9 times slower. Both still make mistakes of their own.
+- **`[models.<label>]` tables** in `config.toml`, each a `model` (name or
+  directory) and a `note`. The label is what `asr.model`, `--model`, the
+  window's list and the transcript header use; `config.model_source`
+  resolves it.
+- **The model is fixed when a recording is queued**, like the language
+  (D-27). The worker keeps a model for as long as consecutive recordings ask
+  for it, and lets it go before loading another: two would crowd 8 GB.
+- **The user's own `config.toml` now names `buzz-korean`**; the built-in
+  default and `config.example.toml` stay `large-v3`, since the Korean model
+  has to be converted by hand first.
+
+### D-29 · 2026-11-27 · active: Whisper's counting is cut from the text
+
+D-26 did not hold: with the hotword list of 2026-11-27, `large-v3` counted
+"3, 4, 5 ... 59" over a minute of 컴넷 6-2 again, inside a run of speech the
+silence threshold cannot see. A run of ten numbers or more separated by
+commas or full stops is now cut from the segment, and the rest kept, since
+that segment began and ended in the lecturer's words. Ten, because a
+lecturer listing scenarios or packets says five or six.
