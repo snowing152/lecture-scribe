@@ -21,7 +21,9 @@ from lecture_scribe.audio_capture import (
     marks_path,
     read_marks,
 )
-from lecture_scribe.config import AsrConfig, Config, OutputConfig
+from lecture_scribe.config import AsrConfig, Config, ModelChoice, OutputConfig
+from lecture_scribe.keep_awake import Inhibition
+from lecture_scribe.transcribe import GpuStatus, Transcription, TranscriptionError
 
 _SPEAKERS = LoopbackDevice(name="Speakers", id="alsa.speakers", is_default=True)
 _HDMI = LoopbackDevice(name="HDMI", id="alsa.hdmi", is_default=False)
@@ -227,8 +229,9 @@ def test_an_unknown_language_fails_before_the_recording_is_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = Config(asr=AsrConfig(language="kr"))
-    worker = gui._TranscribeWorker(config, tmp_path / "os.wav", [])
+    # The language travels with the recording, as chosen when it was queued.
+    job = gui._Job(wav=tmp_path / "os.wav", marks=(), language="kr")
+    worker = gui._TranscribeWorker(Config(), gui._JobQueue([job]))
 
     @dataclass
     class Model:
@@ -335,7 +338,8 @@ def test_a_stop_while_the_model_loads_skips_recognition(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    worker = gui._TranscribeWorker(Config(), tmp_path / "os.wav", [])
+    job = gui._Job(wav=tmp_path / "os.wav", marks=(), language="ko")
+    worker = gui._TranscribeWorker(Config(), gui._JobQueue([job]))
 
     def load(*_args: object, **_kwargs: object) -> object:
         # The window closing while a first download is still running.
@@ -354,6 +358,340 @@ def test_a_stop_while_the_model_loads_skips_recognition(
 
     assert len(stopped) == 1
     assert "before it began" in stopped[0]
+
+
+@pytest.fixture
+def idle_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Transcription workers are created but never run, nor the desktop asked."""
+    monkeypatch.setattr(gui._TranscribeWorker, "start", lambda _self: None)
+    monkeypatch.setattr(
+        gui, "keep_awake", lambda _reason: Inhibition(held=False, detail="test")
+    )
+
+
+def _stop_recording(window: gui._Window, wav: Path, *, mean_rms: float = 0.1) -> None:
+    wav.parent.mkdir(parents=True, exist_ok=True)
+    wav.write_bytes(b"")
+    window._wav = wav
+    window._recording = True
+    window._on_recorded(
+        Recording(
+            path=wav, duration=60.0, peak=0.5, mean_rms=mean_rms, interrupted=None
+        )
+    )
+
+
+def _queued(window: gui._Window) -> list[Path]:
+    assert window._transcriber is not None
+    return window._transcriber.jobs.waiting()
+
+
+def test_a_stopped_recording_is_queued_at_once(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    wav = tmp_path / "lectures" / "a" / "a.wav"
+
+    _stop_recording(window, wav)
+
+    assert _queued(window) == [wav]
+    assert "queued for transcription" in window._status.text()
+    # Already in line, so pressing transcribe would only queue it twice.
+    assert not window._text.isEnabled()
+
+
+def test_a_silent_recording_is_not_queued(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+
+    _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav", mean_rms=0.0)
+
+    assert window._transcriber is None
+    assert "not queued" in window._status.text()
+
+
+def test_the_next_lecture_can_be_recorded_while_one_is_recognised(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav")
+    window._course.setText("os")
+
+    window._refresh()
+
+    assert window._record.isEnabled()
+    assert window._language_box.isEnabled()
+    assert window._open.isEnabled()
+    assert not window._stop_text.isHidden()
+
+
+def test_a_second_recording_joins_the_running_queue(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    first = tmp_path / "lectures" / "a" / "a.wav"
+    second = tmp_path / "lectures" / "b" / "b.wav"
+    _stop_recording(window, first)
+    worker = window._transcriber
+
+    _stop_recording(window, second)
+
+    # The same worker, so the model is not loaded a second time.
+    assert window._transcriber is worker
+    assert _queued(window) == [first, second]
+
+
+def test_the_language_is_the_one_chosen_when_queued(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav")
+    window._language_box.setCurrentIndex(window._language_box.findText("English"))
+    _stop_recording(window, tmp_path / "lectures" / "b" / "b.wav")
+    assert window._transcriber is not None
+    jobs = window._transcriber.jobs
+
+    languages = [job.language for job in (jobs.take(), jobs.take()) if job]
+
+    assert languages == ["ko", "en"]
+
+
+def test_a_recording_queued_as_the_worker_winds_down_gets_a_worker_of_its_own(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav")
+    first = window._transcriber
+    assert first is not None
+    # The worker has taken the last recording and found the queue empty.
+    first.jobs.take()
+    assert first.jobs.take() is None
+    late = tmp_path / "lectures" / "b" / "b.wav"
+
+    _stop_recording(window, late)
+    window._release_transcriber()
+
+    assert window._transcriber is not None
+    assert window._transcriber is not first
+    assert _queued(window) == [late]
+
+
+def test_stop_drops_every_recording_still_waiting(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav")
+    _stop_recording(window, tmp_path / "lectures" / "b" / "b.wav")
+
+    window._stop_transcription()
+
+    assert _queued(window) == []
+    assert not window._stop_text.isEnabled()
+    assert "2 queued recordings dropped" in window._queue_line.text()
+
+
+def test_a_queue_found_empty_refuses_more_work(tmp_path: Path) -> None:
+    jobs = gui._JobQueue([])
+
+    assert jobs.take() is None
+    assert not jobs.put(gui._Job(wav=tmp_path / "a.wav", marks=(), language="ko"))
+
+
+@dataclass
+class _Model:
+    supported_languages: tuple[str, ...] = ("en", "ko")
+
+
+def test_one_model_serves_the_queue_and_a_failure_does_not_end_it(
+    app: QApplication,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broken = tmp_path / "broken" / "broken.wav"
+    fine = tmp_path / "fine" / "fine.wav"
+    fine.parent.mkdir()
+    jobs = gui._JobQueue(
+        [
+            gui._Job(wav=broken, marks=(), language="ko"),
+            gui._Job(wav=fine, marks=(), language="ko"),
+        ]
+    )
+    worker = gui._TranscribeWorker(Config(), jobs)
+    loads: list[str] = []
+
+    def load(name: str, **_kwargs: object) -> _Model:
+        loads.append(name)
+        return _Model()
+
+    def recognise(_model: object, wav: Path, **_kwargs: object) -> Transcription:
+        if wav == broken:
+            raise TranscriptionError(f"cannot transcribe {wav}: damaged")
+        return Transcription(segments=[], audio_duration=60.0, decode_seconds=6.0)
+
+    monkeypatch.setattr(gui, "load_model", load)
+    monkeypatch.setattr(gui, "transcribe", recognise)
+    began: list[Path] = []
+    failed: list[str] = []
+    written: list[Path] = []
+    worker.began.connect(began.append)
+    worker.failed.connect(failed.append)
+    worker.transcribed.connect(lambda wav, _path, _text, _result: written.append(wav))
+
+    worker.run()
+
+    assert loads == ["large-v3"]
+    assert began == [broken, fine]
+    assert len(failed) == 1
+    assert "damaged" in failed[0]
+    assert written == [fine]
+    assert (fine.parent / "fine.txt").is_file()
+
+
+def test_a_gpu_that_cannot_decode_fails_the_whole_queue_at_once(
+    app: QApplication,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = gui._JobQueue(
+        [
+            gui._Job(wav=tmp_path / "a.wav", marks=(), language="ko"),
+            gui._Job(wav=tmp_path / "b.wav", marks=(), language="ko"),
+        ]
+    )
+    worker = gui._TranscribeWorker(Config(asr=AsrConfig(gpu=True)), jobs)
+
+    def never(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("no model should be loaded without a usable GPU")
+
+    monkeypatch.setattr(
+        gui, "gpu_status", lambda: GpuStatus(False, 1, "cuBLAS cannot be loaded")
+    )
+    monkeypatch.setattr(gui, "load_model", never)
+    failed: list[str] = []
+    worker.failed.connect(failed.append)
+
+    worker.run()
+
+    assert len(failed) == 1
+    assert "cuBLAS cannot be loaded" in failed[0]
+    assert "2 recordings not transcribed" in failed[0]
+    assert jobs.waiting() == []
+
+
+_OFFERED = (
+    ModelChoice(label="large-v3", model="large-v3", note="default"),
+    ModelChoice(label="buzz", model="/models/buzz", note="Korean-tuned"),
+)
+
+
+def test_the_model_list_shows_each_note_and_starts_on_the_configured_one(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    config = Config(output=OutputConfig(dir=tmp_path / "lectures"), models=_OFFERED)
+
+    window = gui._Window(config)
+
+    shown = [window._model_box.itemText(i) for i in range(window._model_box.count())]
+    assert shown == ["large-v3  ·  default", "buzz  ·  Korean-tuned"]
+    assert window._recognition_config().asr.model == "large-v3"
+
+
+def test_a_configured_model_outside_the_list_is_kept(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    config = Config(
+        asr=AsrConfig(model="medium"),
+        output=OutputConfig(dir=tmp_path / "lectures"),
+        models=_OFFERED,
+    )
+
+    window = gui._Window(config)
+
+    assert window._model_box.count() == 3
+    assert window._recognition_config().asr.model == "medium"
+
+
+def test_a_recording_is_queued_with_the_model_chosen_then(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    config = Config(output=OutputConfig(dir=tmp_path / "lectures"), models=_OFFERED)
+    window = gui._Window(config)
+    window._model_box.setCurrentIndex(window._model_box.findData("buzz"))
+
+    _stop_recording(window, tmp_path / "lectures" / "a" / "a.wav")
+    assert window._transcriber is not None
+    job = window._transcriber.jobs.take()
+
+    assert job is not None
+    assert job.model == "buzz"
+
+
+def test_a_model_is_loaded_once_per_run_of_recordings_that_ask_for_it(
+    app: QApplication,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wavs = [tmp_path / name / f"{name}.wav" for name in ("a", "b", "c")]
+    for wav in wavs:
+        wav.parent.mkdir()
+    jobs = gui._JobQueue(
+        [
+            gui._Job(wav=wavs[0], marks=(), language="ko", model="buzz"),
+            gui._Job(wav=wavs[1], marks=(), language="ko", model="buzz"),
+            gui._Job(wav=wavs[2], marks=(), language="ko", model="large-v3"),
+        ]
+    )
+    worker = gui._TranscribeWorker(Config(models=_OFFERED), jobs)
+    loads: list[str] = []
+
+    def load(name: str, **_kwargs: object) -> _Model:
+        loads.append(name)
+        return _Model()
+
+    def recognise(_model: object, _wav: Path, **_kwargs: object) -> Transcription:
+        return Transcription(segments=[], audio_duration=60.0, decode_seconds=6.0)
+
+    monkeypatch.setattr(gui, "load_model", load)
+    monkeypatch.setattr(gui, "transcribe", recognise)
+    texts: list[str] = []
+    worker.transcribed.connect(lambda _wav, _path, text, _result: texts.append(text))
+
+    worker.run()
+
+    # The label is resolved to what it names, and loaded again only on change.
+    assert loads == ["/models/buzz", "large-v3"]
+    # The transcript header names the model by its label, not its directory.
+    assert "buzz" in texts[0].splitlines()[0]
+    assert "/models/buzz" not in texts[0]
 
 
 @pytest.mark.manual

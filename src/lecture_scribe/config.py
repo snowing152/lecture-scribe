@@ -86,6 +86,22 @@ class OutputConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelChoice:
+    """A model offered by a short name, in the window and to ``--model``.
+
+    Attributes:
+        label: Short name, written in the transcript header and accepted
+            wherever a model is named, such as ``asr.model``.
+        model: faster-whisper model name or a path to a local model directory.
+        note: One line on what the model is good at, shown in the window.
+    """
+
+    label: str
+    model: str
+    note: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     """The complete effective configuration.
 
@@ -93,13 +109,30 @@ class Config:
         audio: Capture settings.
         asr: Recognition settings.
         output: Result location and transcript shape.
+        models: Models offered by name, from the ``[models]`` tables.
         source: File the settings were read from, or ``None`` for defaults.
     """
 
     audio: AudioConfig = AudioConfig()
     asr: AsrConfig = AsrConfig()
     output: OutputConfig = OutputConfig()
+    models: tuple[ModelChoice, ...] = ()
     source: Path | None = None
+
+
+def model_source(config: Config) -> str:
+    """What to load for ``asr.model``: the model behind a label, or the value itself.
+
+    Args:
+        config: Effective configuration.
+
+    Returns:
+        A faster-whisper model name or a local model directory.
+    """
+    for choice in config.models:
+        if choice.label == config.asr.model:
+            return choice.model
+    return config.asr.model
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -128,12 +161,13 @@ def load_config(path: Path | None = None) -> Config:
     except OSError as error:
         raise ConfigError(f"cannot read {config_path}: {error}") from error
 
-    sections = ("audio", "asr", "output")
+    sections = ("audio", "asr", "output", "models")
     _reject_unknown("config.toml", raw, sections)
     return Config(
         audio=_audio(_section(raw, "audio")),
         asr=_asr(_section(raw, "asr")),
         output=_output(_section(raw, "output")),
+        models=_models(_section(raw, "models")),
         source=config_path,
     )
 
@@ -228,6 +262,27 @@ def _output(raw: Mapping[str, Any]) -> OutputConfig:
             "output", raw, "paragraph_max", default.paragraph_max, minimum=0.0
         ),
     )
+
+
+def _models(raw: Mapping[str, Any]) -> tuple[ModelChoice, ...]:
+    """Build the ``[models.<label>]`` tables, in the order they are written."""
+    choices = []
+    for label, entry in raw.items():
+        where = f"models.{label}"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"[{where}] must be a table, got {type(entry).__name__}")
+        _reject_unknown(where, entry, ("model", "note"))
+        if "model" not in entry:
+            raise ConfigError(f"[{where}] needs a model: a model name or a directory")
+        model = _str(where, entry, "model", "")
+        # Only a leading ~ is expanded: a hub name such as `large-v3` must
+        # not be turned into a path.
+        if model.startswith("~"):
+            model = str(Path(model).expanduser())
+        choices.append(
+            ModelChoice(label=label, model=model, note=_str(where, entry, "note", ""))
+        )
+    return tuple(choices)
 
 
 def _names(cls: type) -> tuple[str, ...]:

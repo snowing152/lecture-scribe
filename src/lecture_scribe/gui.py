@@ -3,7 +3,9 @@
 A second front end beside :mod:`lecture_scribe.cli`, and like it, holding no
 logic of its own: it drives the same capture, recognition and formatting
 functions and shows what they report. Recording and recognition each get a
-worker thread, because both block for as long as the lecture is long.
+worker thread, because both block for as long as the lecture is long, and
+they may run at once: the next lecture can be recorded while the queue of
+earlier ones is recognised.
 
 Qt's Fusion style is forced on both platforms. The window has to look the
 same on Linux and on Windows, and the native styles differ too much in
@@ -15,6 +17,9 @@ import html
 import math
 import sys
 import threading
+from collections import deque
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -71,7 +76,13 @@ from lecture_scribe.audio_capture import (
     remove_if_empty,
     resolve_device,
 )
-from lecture_scribe.config import Config, ConfigError, load_config, merge_cli
+from lecture_scribe.config import (
+    Config,
+    ConfigError,
+    load_config,
+    merge_cli,
+    model_source,
+)
 from lecture_scribe.format_text import (
     Passage,
     format_duration,
@@ -88,6 +99,7 @@ from lecture_scribe.transcribe import (
     check_language,
     compute_type,
     earlier_transcript,
+    gpu_status,
     load_model,
     transcribe,
     transcript_path,
@@ -298,60 +310,164 @@ class _RecordWorker(QThread):
         self.progressed.emit(progress)
 
 
-class _TranscribeWorker(QThread):
-    """Loads the model and transcribes one recording off the GUI thread.
+@dataclass(frozen=True, slots=True)
+class _Job:
+    """One recording waiting to be transcribed, with what it was queued with.
 
+    Attributes:
+        wav: Recording to transcribe.
+        marks: Offsets in seconds flagged during the lecture.
+        language: Spoken language, fixed when the recording was queued so
+            that choosing another one for the next lecture leaves it alone.
+        model: Model to recognise it with, as named in the window or in
+            ``asr.model``; fixed when queued, like the language.
+    """
+
+    wav: Path
+    marks: tuple[float, ...]
+    language: str
+    model: str = "large-v3"
+
+
+class _JobQueue:
+    """Recordings waiting for the transcription worker, shared by two threads.
+
+    Once the worker has found it empty the queue closes, and a recording
+    offered after that is refused rather than left behind by a worker that is
+    already on its way out; the window then starts a new worker for it.
+    """
+
+    def __init__(self, jobs: Sequence[_Job]) -> None:
+        """Hold the first recordings.
+
+        Args:
+            jobs: Recordings to transcribe, in order.
+        """
+        self._lock = threading.Lock()
+        self._jobs: deque[_Job] = deque(jobs)
+        self._closed = False
+
+    def put(self, job: _Job) -> bool:
+        """Add a recording at the back.
+
+        Returns:
+            Whether the worker will reach it; ``False`` once the queue closed.
+        """
+        with self._lock:
+            if self._closed:
+                return False
+            self._jobs.append(job)
+            return True
+
+    def take(self) -> _Job | None:
+        """Hand the worker the next recording, closing the queue when none is left."""
+        with self._lock:
+            if not self._jobs:
+                self._closed = True
+                return None
+            return self._jobs.popleft()
+
+    def drop(self) -> int:
+        """Empty and close the queue.
+
+        Returns:
+            How many recordings were waiting.
+        """
+        with self._lock:
+            dropped = len(self._jobs)
+            self._jobs.clear()
+            self._closed = True
+            return dropped
+
+    def waiting(self) -> list[Path]:
+        """The recordings not yet started, in order."""
+        with self._lock:
+            return [job.wav for job in self._jobs]
+
+
+class _TranscribeWorker(QThread):
+    """Transcribes queued recordings one by one, loading each model once.
+
+    One after another rather than side by side: two copies of the model would
+    fit in 8 GB of video memory, but each would decode slower and the margin
+    left would be thin. A model stays loaded for as long as the recordings in
+    a row ask for it, since loading alone can take longer than a short
+    recording; only a recording queued with another model replaces it.
     Recognition can be given up part way through, which is what lets the
     window close during the twenty minutes a long lecture takes.
     """
 
     staged = Signal(str)
+    began = Signal(Path)
     progressed = Signal(Decoding)
-    transcribed = Signal(Path, str, Transcription)
+    transcribed = Signal(Path, Path, str, Transcription)
     stopped = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, config: Config, wav: Path, marks: list[float]) -> None:
-        """Prepare a transcription without starting it.
+    def __init__(self, config: Config, jobs: _JobQueue) -> None:
+        """Prepare the transcriptions without starting them.
 
         Args:
-            config: Effective configuration.
-            wav: Recording to transcribe.
-            marks: Offsets in seconds flagged during the lecture.
+            config: Effective configuration; each recording's own language
+                and model replace the ones in it.
+            jobs: Recordings to transcribe, which may grow while it runs.
         """
         super().__init__()
         self._config = config
-        self._wav = wav
-        self._marks = marks
+        self.jobs = jobs
         self._stop = threading.Event()
 
     def stop(self) -> None:
-        """Ask recognition to give up at the end of the segment it is on."""
+        """Give up the recording being decoded and every one still waiting."""
         self._stop.set()
+        self.jobs.drop()
 
     def run(self) -> None:
-        """Recognise the recording and write its transcript beside it."""
-        asr = self._config.asr
-        self.staged.emit(
-            f"loading {asr.model} ({compute_type(asr.gpu)}), "
-            f"language {asr.language} ..."
-        )
-        try:
-            model = load_model(asr.model, gpu=asr.gpu)
-        except TranscriptionError as error:
-            self.failed.emit(str(error))
-            return
+        """Recognise each queued recording and write its transcript beside it."""
+        gpu = self._config.asr.gpu
+        # Checked first because a missing cuBLAS only shows once decoding has
+        # begun, and it would then fail every recording in the queue in turn.
+        if gpu:
+            status = gpu_status()
+            if not status.available:
+                self._fail_all(status.detail, taken=0)
+                return
 
-        # A stop that arrived while the model loaded -- the window closed
-        # during a first download, say -- would otherwise reach the decoder
-        # only after it had read and scanned the whole recording, half a
-        # minute more of a process with no window left to show for it.
-        if self._stop.is_set():
-            self.stopped.emit(
-                "recognition was stopped before it began; the recording itself "
-                "is untouched and can be transcribed again"
-            )
-            return
+        loaded: str | None = None
+        model: object = None
+        while (job := self.jobs.take()) is not None:
+            if job.model != loaded:
+                # The previous model is let go first: two at once would
+                # crowd 8 GB of video memory.
+                model = None
+                self.staged.emit(f"loading {job.model} ({compute_type(gpu)}) ...")
+                try:
+                    model = load_model(
+                        model_source(merge_cli(self._config, model=job.model)),
+                        gpu=gpu,
+                    )
+                except TranscriptionError as error:
+                    self._fail_all(str(error), taken=1)
+                    return
+                loaded = job.model
+                # A stop that arrived while the model loaded -- the window
+                # closed during a first download, say -- has emptied the queue
+                # already, so the loop would end without a word.
+                if self._stop.is_set():
+                    self.stopped.emit(
+                        "recognition was stopped before it began; the recordings "
+                        "themselves are untouched and can be transcribed again"
+                    )
+                    return
+            self.began.emit(job.wav)
+            self._run_one(model, job)
+            if self._stop.is_set():
+                return
+
+    def _run_one(self, model: object, job: _Job) -> None:
+        """Transcribe one recording, reporting a failure without ending the queue."""
+        config = merge_cli(self._config, language=job.language, model=job.model)
+        asr = config.asr
         try:
             check_language(model, asr.language)
         except TranscriptionError as error:
@@ -361,11 +477,14 @@ class _TranscribeWorker(QThread):
         # The decoder scans the whole file for speech before the first
         # segment exists, which on a long lecture is a good twenty seconds
         # with nothing moving on screen.
-        self.staged.emit("reading the recording and finding the speech in it ...")
+        self.staged.emit(
+            f"{job.wav.parent.name}: reading the recording and finding the "
+            "speech in it ..."
+        )
         try:
             result = transcribe(
                 model,
-                self._wav,
+                job.wav,
                 language=asr.language,
                 beam_size=asr.beam_size,
                 hotwords=asr.hotwords,
@@ -385,22 +504,35 @@ class _TranscribeWorker(QThread):
 
         text = render_transcript(
             result.segments,
-            title=self._wav.parent.name,
+            title=job.wav.parent.name,
             model=asr.model,
             language=asr.language,
             audio_duration=result.audio_duration,
-            paragraph_gap=self._config.output.paragraph_gap,
-            paragraph_target=self._config.output.paragraph_target,
-            paragraph_max=self._config.output.paragraph_max,
-            marks=self._marks,
+            paragraph_gap=config.output.paragraph_gap,
+            paragraph_target=config.output.paragraph_target,
+            paragraph_max=config.output.paragraph_max,
+            marks=list(job.marks),
         )
-        path = transcript_path(self._wav)
+        path = transcript_path(job.wav)
         try:
             write_transcript(path, text)
         except OSError as error:
             self.failed.emit(f"cannot write {path}: {error}")
             return
-        self.transcribed.emit(path, text, result)
+        self.transcribed.emit(job.wav, path, text, result)
+
+    def _fail_all(self, reason: str, *, taken: int) -> None:
+        """Report a failure that would repeat for every recording, and drop them.
+
+        Args:
+            reason: What went wrong.
+            taken: Recordings already out of the queue and not transcribed,
+                counted among those left behind.
+        """
+        dropped = self.jobs.drop() + taken
+        self.failed.emit(
+            f"{reason} · {_plural(dropped, 'recording')} not transcribed, safe on disk"
+        )
 
 
 class _Combo(QComboBox):
@@ -725,10 +857,17 @@ class _Window(QWidget):
         self._picked: LoopbackDevice | None = None
         self._recorder: _RecordWorker | None = None
         self._transcriber: _TranscribeWorker | None = None
-        # Recording and recognition never run at once, so one request covers both.
+        # Recordings queued after the worker found its queue empty and began
+        # winding down; they get a worker of their own once it has finished.
+        self._backlog: list[_Job] = []
+        # The recording being decoded, None between recordings.
+        self._current: Path | None = None
+        # One request covers recording and recognition, which may now overlap;
+        # it is let go only once neither is running.
         self._awake: Inhibition | None = None
         self._recording = False
         self._transcribing = False
+        self._stopping_recognition = False
         self._closing = False
         self._wav: Path | None = None
         self._marks: list[float] = []
@@ -737,6 +876,7 @@ class _Window(QWidget):
         self._build()
         self._load_devices()
         self._load_languages()
+        self._load_models()
         self._refresh()
 
     def _build(self) -> None:
@@ -770,6 +910,7 @@ class _Window(QWidget):
         form.setColumnStretch(0, 1)
         form.setColumnStretch(1, 2)
         form.setColumnStretch(2, 0)
+        form.setColumnStretch(3, 1)
         self._course = QLineEdit()
         self._course.setPlaceholderText("used for the folder")
         self._course.textChanged.connect(self._refresh)
@@ -787,12 +928,21 @@ class _Window(QWidget):
         self._language_box.setToolTip(
             "the language the lecture is spoken in; used when transcribing"
         )
+        self._model_box = _Combo()
+        # Each entry carries its note, which would otherwise widen the window.
+        self._model_box.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._model_box.setMinimumContentsLength(10)
+        self._model_box.currentIndexChanged.connect(self._on_model_picked)
         form.addWidget(_caption("Course"), 0, 0)
         form.addWidget(_caption("Device"), 0, 1)
         form.addWidget(_caption("Language"), 0, 2)
+        form.addWidget(_caption("Model"), 0, 3)
         form.addWidget(self._course, 1, 0)
         form.addWidget(self._device_box, 1, 1)
         form.addWidget(self._language_box, 1, 2)
+        form.addWidget(self._model_box, 1, 3)
         layout.addLayout(form)
         layout.addSpacing(34)
 
@@ -832,6 +982,10 @@ class _Window(QWidget):
         self._open.setToolTip("transcribe a recording made earlier (Ctrl+O)")
         self._open.clicked.connect(self._open_recording)
         self._text = QPushButton("transcribe")
+        self._text.setToolTip(
+            "queue this recording for transcription; a new recording is "
+            "queued by itself when it stops"
+        )
         self._text.clicked.connect(self._start_transcription)
 
         buttons = QHBoxLayout()
@@ -854,6 +1008,25 @@ class _Window(QWidget):
         self._status.setObjectName("status")
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
+        layout.addSpacing(8)
+
+        # Recognition keeps a line of its own, since the clock, the meter and
+        # the status line above belong to a recording whenever one runs.
+        queue_row = QHBoxLayout()
+        queue_row.setSpacing(10)
+        self._queue_line = QLabel("")
+        self._queue_line.setObjectName("levels")
+        self._queue_line.setWordWrap(True)
+        self._stop_text = QPushButton("stop")
+        self._stop_text.setIcon(_glyph("square", _TEXT))
+        self._stop_text.setIconSize(QSize(_GLYPH + _GLYPH_GAP, _GLYPH))
+        self._stop_text.setToolTip(
+            "stop recognition and clear the queue; the recordings stay on disk"
+        )
+        self._stop_text.clicked.connect(self._stop_transcription)
+        queue_row.addWidget(self._queue_line, 1)
+        queue_row.addWidget(self._stop_text)
+        layout.addLayout(queue_row)
         layout.addSpacing(14)
 
         self._transcript = _Transcript()
@@ -936,16 +1109,50 @@ class _Window(QWidget):
             self._language_box.addItem(configured, configured)
         self._language_box.setCurrentIndex(self._language_box.findData(configured))
 
+    def _load_models(self) -> None:
+        """Fill the model list from ``[models]`` and select ``asr.model``.
+
+        Each entry shows its note, which is the point of the list: which
+        model suits what. A configured model that is not in ``[models]`` is
+        added under its own name, as the language list does with a code.
+        """
+        configured = self._config.asr.model
+        labels = [choice.label for choice in self._config.models]
+        if configured not in labels:
+            self._model_box.addItem(configured, configured)
+            self._model_box.setItemData(0, configured, Qt.ItemDataRole.ToolTipRole)
+        for choice in self._config.models:
+            shown = f"{choice.label}  ·  {choice.note}" if choice.note else choice.label
+            self._model_box.addItem(shown, choice.label)
+            self._model_box.setItemData(
+                self._model_box.count() - 1,
+                f"{choice.note}\n{choice.model}" if choice.note else choice.model,
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        self._model_box.setCurrentIndex(self._model_box.findData(configured))
+
+    def _on_model_picked(self, index: int) -> None:
+        """Show the chosen model's note in full, since the box cuts it short."""
+        note = self._model_box.itemData(index, Qt.ItemDataRole.ToolTipRole)
+        self._model_box.setToolTip(
+            "the model used for recordings queued from now on"
+            + (f":\n{note}" if note else "")
+        )
+
     def _recognition_config(self) -> Config:
-        """The configuration a transcription runs with, language as chosen.
+        """The configuration a transcription runs with, language and model as chosen.
 
         Returns:
-            The configuration from ``config.toml``, with the language field's
-            choice applied the way ``--language`` applies it on the command
-            line. Nothing is written back: the next start begins from the
-            file again.
+            The configuration from ``config.toml``, with the language and
+            model fields' choices applied the way ``--language`` and
+            ``--model`` apply them on the command line. Nothing is written
+            back: the next start begins from the file again.
         """
-        return merge_cli(self._config, language=str(self._language_box.currentData()))
+        return merge_cli(
+            self._config,
+            language=str(self._language_box.currentData()),
+            model=str(self._model_box.currentData()),
+        )
 
     def _on_device_picked(self, index: int) -> None:
         """Remember a device chosen by hand, so a refill of the list keeps it."""
@@ -968,8 +1175,12 @@ class _Window(QWidget):
         self._start_recording()
 
     def _start_recording(self) -> None:
-        """Create the lecture folder and hand the capture to a worker."""
-        if self._busy():
+        """Create the lecture folder and hand the capture to a worker.
+
+        Recognition of earlier recordings may carry on meanwhile: capture
+        barely touches the processor and decoding runs on the GPU.
+        """
+        if self._recorder is not None:
             return
         device = self._load_devices(starting=True)
         if device is None:
@@ -1007,11 +1218,9 @@ class _Window(QWidget):
 
         self._recorder = worker
         self._recording = True
-        self._awake = keep_awake("recording a lecture")
+        awake = self._hold_awake("recording a lecture")
         self._refresh()
-        note = (
-            "" if self._awake.held else f" · the screen may lock: {self._awake.detail}"
-        )
+        note = "" if awake.held else f" · the screen may lock: {awake.detail}"
         self._say(f"recording to {_short_path(self._wav)}{note}", path=self._wav)
         worker.start()
 
@@ -1030,7 +1239,12 @@ class _Window(QWidget):
         self._say(message, problem=True)
 
     def _on_recorded(self, recording: Recording) -> None:
-        """Report the finished file and offer to transcribe it."""
+        """Report the finished file and queue it for recognition.
+
+        Queued at once, so the next lecture can be recorded while this one is
+        recognised. A silent recording is not: it would cost minutes of
+        decoding to produce an empty transcript.
+        """
         self._recording = False
         self._meter.reset()
         self._clock.setText(format_duration(recording.duration))
@@ -1047,21 +1261,26 @@ class _Window(QWidget):
                 f"transcribe · {_short_path(recording.path)}",
                 path=recording.path,
             )
-        elif recording.interrupted is not None:
-            self._say(recording.interrupted, problem=True)
         elif recording.mean_rms < self._config.audio.silence_rms:
             self._say(
-                "the recording is silent from end to end. The audio was kept "
-                "anyway; check that the lecture was playing through the "
-                "selected device.",
+                "the recording is silent from end to end, so it was not queued "
+                "for transcription. The audio was kept anyway; check that the "
+                "lecture was playing through the selected device.",
                 problem=True,
             )
         else:
-            self._say(
-                f"stopped after {format_duration(recording.duration)} · "
-                f"{_short_path(recording.path)}",
-                path=recording.path,
-            )
+            # What was captured before an interruption is valid audio, so it
+            # is queued like a recording that was stopped by hand.
+            queued = self._enqueue(recording.path, self._marks)
+            outcome = " · queued for transcription" if queued else ""
+            if recording.interrupted is not None:
+                self._say(f"{recording.interrupted}{outcome}", problem=True)
+            else:
+                self._say(
+                    f"stopped after {format_duration(recording.duration)} · "
+                    f"{_short_path(recording.path)}{outcome}",
+                    path=recording.path,
+                )
         self._refresh()
 
     def _on_record_failed(self, message: str) -> None:
@@ -1094,7 +1313,8 @@ class _Window(QWidget):
         if self._recorder is not None:
             self._recorder.wait()
             self._recorder = None
-        self._let_sleep()
+        if self._transcriber is None:
+            self._let_sleep()
         if self._recording:
             self._recording = False
             self._meter.reset()
@@ -1136,8 +1356,10 @@ class _Window(QWidget):
         Lectures reach this folder without `scribe rec` having made them --
         copied in, renamed, recorded on another machine -- and after a
         restart the window has no recording of its own to work on either.
+        Allowed while recognition runs, but not during a recording, whose
+        marks still belong to the lecture being captured.
         """
-        if self._busy():
+        if self._recorder is not None:
             return
 
         chosen, _selected_filter = QFileDialog.getOpenFileName(
@@ -1174,6 +1396,10 @@ class _Window(QWidget):
         self._clock.setText(format_duration(existing.duration))
         self._levels.setText(f"{existing.size_bytes / 1_000_000:.1f} MB")
         self._show_earlier_transcript(existing, marks=len(marks))
+        if path == self._current:
+            # Its live preview picks up from here; mixed into the old
+            # transcript it would read as one text.
+            self._transcript.clear()
         self._refresh()
 
     def _show_earlier_transcript(
@@ -1216,20 +1442,51 @@ class _Window(QWidget):
         )
 
     def _start_transcription(self) -> None:
-        """Start recognition, or give up the one that is running."""
-        if self._transcribing and self._transcriber is not None:
-            self._say("stopping recognition ...")
-            self._chip.show_state("stopping")
-            self._text.setEnabled(False)
-            self._transcriber.stop()
+        """Queue the recording in view, behind any already being recognised."""
+        if self._wav is None or self._recorder is not None:
             return
-        if self._wav is None or self._busy():
-            return
-        self._transcript.clear()
-        worker = _TranscribeWorker(
-            self._recognition_config(), self._wav, list(self._marks)
+        if self._enqueue(self._wav, self._marks):
+            self._say(f"{_short_path(self._wav)} · queued for transcription")
+        self._refresh()
+
+    def _enqueue(self, wav: Path, marks: Sequence[float]) -> bool:
+        """Put a recording in line for recognition, starting a worker if none runs.
+
+        A running worker is never replaced: a QThread destroyed while it
+        still runs aborts the process, and the stale ``finished`` would
+        release the next job's keep-awake. A worker past its last recording
+        but not yet finished -- freeing a GPU model takes a moment -- refuses
+        new work, which then waits in the backlog for a worker of its own.
+
+        Args:
+            wav: Recording to transcribe.
+            marks: Offsets in seconds flagged during the lecture.
+
+        Returns:
+            Whether it was queued; ``False`` when it already was, or the
+            window is closing.
+        """
+        if self._closing:
+            return False
+        if self._is_queued(wav):
+            self._say(f"{_short_path(wav)} is already queued for transcription")
+            return False
+        chosen = self._recognition_config().asr
+        job = _Job(
+            wav=wav, marks=tuple(marks), language=chosen.language, model=chosen.model
         )
-        worker.staged.connect(self._say)
+        if self._transcriber is None:
+            self._start_worker([job])
+        elif not self._transcriber.jobs.put(job):
+            self._backlog.append(job)
+        self._show_queue()
+        return True
+
+    def _start_worker(self, jobs: list[_Job]) -> None:
+        """Hand a list of recordings to a new transcription worker."""
+        worker = _TranscribeWorker(self._config, _JobQueue(jobs))
+        worker.staged.connect(self._on_staged)
+        worker.began.connect(self._on_began)
         worker.progressed.connect(self._on_decoding)
         worker.transcribed.connect(self._on_transcribed)
         worker.stopped.connect(self._on_transcribe_stopped)
@@ -1238,9 +1495,72 @@ class _Window(QWidget):
 
         self._transcriber = worker
         self._transcribing = True
-        self._awake = keep_awake("transcribing a lecture")
+        self._stopping_recognition = False
+        self._hold_awake("transcribing a lecture")
         self._refresh()
         worker.start()
+
+    def _is_queued(self, wav: Path) -> bool:
+        """Whether a recording is being recognised or waiting to be."""
+        return wav == self._current or wav in self._waiting()
+
+    def _waiting(self) -> list[Path]:
+        """The recordings queued but not yet started, in order."""
+        queued = [] if self._transcriber is None else self._transcriber.jobs.waiting()
+        return queued + [job.wav for job in self._backlog]
+
+    def _showing(self, wav: Path | None) -> bool:
+        """Whether recognition of this recording may draw on the clock and pane.
+
+        Only the recording in view, and never during a recording: the clock,
+        the meter and the pane then belong to the lecture being captured.
+        """
+        return wav is not None and wav == self._wav and not self._recording
+
+    def _stop_transcription(self) -> None:
+        """Give up the recording being recognised and every one still waiting."""
+        if self._transcriber is None:
+            return
+        dropped = len(self._waiting())
+        self._backlog.clear()
+        self._stopping_recognition = True
+        self._transcriber.stop()
+        left = f", {_plural(dropped, 'queued recording')} dropped" if dropped else ""
+        self._queue_line.setText(f"stopping recognition{left} ...")
+        self._refresh()
+
+    def _show_queue(self, doing: str | None = None) -> None:
+        """Write the recognition line: what is happening, and how many wait.
+
+        Args:
+            doing: What the worker is doing now; ``None`` describes it from
+                the recording being decoded.
+        """
+        if self._transcriber is None and not self._backlog:
+            self._queue_line.setText("")
+            return
+        if doing is None:
+            doing = (
+                f"transcribing {self._current.parent.name}"
+                if self._current is not None
+                else "starting recognition ..."
+            )
+        waiting = len(self._waiting())
+        suffix = f"   ·   {waiting} waiting" if waiting else ""
+        self._queue_line.setText(f"{doing}{suffix}")
+
+    def _on_staged(self, message: str) -> None:
+        """Show what the worker is doing before decoding has begun."""
+        if not self._stopping_recognition:
+            self._show_queue(message)
+
+    def _on_began(self, wav: Path) -> None:
+        """Note which recording is being recognised now."""
+        self._current = wav
+        if self._showing(wav):
+            self._transcript.clear()
+        self._show_queue()
+        self._refresh()
 
     def _on_decoding(self, decoding: Decoding) -> None:
         """Show how far recognition has got, and the text as it arrives.
@@ -1249,6 +1569,15 @@ class _Window(QWidget):
         double digit minutes on a full lecture. What the pane shows here is
         replaced by the finished transcript once the last segment is in.
         """
+        if self._stopping_recognition or self._current is None:
+            return
+        self._show_queue(
+            f"transcribing {self._current.parent.name}   ·   "
+            f"{decoding.fraction * 100:.0f}%   ·   "
+            f"{format_duration(decoding.remaining)} left"
+        )
+        if not self._showing(self._current):
+            return
         self._clock.setText(format_duration(decoding.position))
         self._meter.set_fraction(decoding.fraction)
         self._chip.show_state(f"transcribing {decoding.fraction * 100:.0f}%")
@@ -1263,18 +1592,27 @@ class _Window(QWidget):
             format_timecode(decoding.position).strip("[]"), decoding.text
         )
 
-    def _on_transcribed(self, path: Path, text: str, result: Transcription) -> None:
-        """Show the finished transcript and how long decoding took."""
-        self._transcribing = False
-        self._meter.reset()
-        self._clock.setText(format_duration(result.audio_duration))
-        self._transcript.show_transcript(text)
+    def _on_transcribed(
+        self, wav: Path, path: Path, text: str, result: Transcription
+    ) -> None:
+        """Show the finished transcript and how long decoding took.
+
+        The outcome goes on the status line even during a recording: the
+        clock and the chip already say that one is running, while a finished
+        or failed transcript would otherwise go unseen.
+        """
+        self._current = None
+        if self._showing(wav):
+            self._meter.reset()
+            self._clock.setText(format_duration(result.audio_duration))
+            self._transcript.show_transcript(text)
         message = (
             f"wrote {_short_path(path)} · {_plural(len(result.segments), 'segment')} · "
             f"{format_duration(result.decode_seconds)} "
             f"({result.decode_ratio:.2f}x audio length)"
         )
         self._say(message, path=path)
+        self._show_queue()
         self._refresh()
 
     def _on_transcribe_stopped(self, message: str) -> None:
@@ -1284,42 +1622,69 @@ class _Window(QWidget):
             message: What was recognised before it stopped, and what that
                 leaves behind.
         """
-        self._transcribing = False
-        self._meter.reset()
-        self._say(message)
-        self._refresh()
+        self._finish_one(message, problem=False)
 
     def _on_transcribe_failed(self, message: str) -> None:
-        """Report a recognition that could not be completed."""
-        self._transcribing = False
-        self._meter.reset()
-        self._say(message, problem=True)
+        """Report a recording that could not be recognised; the queue goes on."""
+        self._finish_one(message, problem=True)
+
+    def _finish_one(self, message: str, *, problem: bool) -> None:
+        """Clear the recording that ended without a transcript, and say why."""
+        if self._showing(self._current):
+            self._meter.reset()
+        self._current = None
+        self._say(message, problem=problem)
+        self._show_queue()
         self._refresh()
 
     def _release_transcriber(self) -> None:
-        """Drop the finished worker, never leaving the window mid-recognition.
+        """Drop the finished worker, and start one for anything queued since.
 
         The same reasoning as :meth:`_release_recorder`: a thread that dies
-        without reporting would otherwise leave every button disabled for
-        good.
+        without reporting would otherwise leave the window showing a
+        recognition that is no longer running.
         """
         if self._transcriber is not None:
             self._transcriber.wait()
             self._transcriber = None
-        self._let_sleep()
-        if self._transcribing:
-            self._transcribing = False
-            self._meter.reset()
+        if self._current is not None:
+            if self._showing(self._current):
+                self._meter.reset()
             self._say(
-                "recognition ended without saying why; the recording itself "
-                "is untouched and can be transcribed again",
+                f"recognition of {self._current.parent.name} ended without "
+                "saying why; the recording itself is untouched and can be "
+                "transcribed again",
                 problem=True,
             )
+            self._current = None
+        self._transcribing = False
+        self._stopping_recognition = False
+        if self._closing:
+            self._backlog.clear()
+        if self._backlog:
+            jobs, self._backlog = self._backlog, []
+            self._start_worker(jobs)
+        elif self._recorder is None:
+            self._let_sleep()
+        self._show_queue()
         self._refresh()
         if self._closing:
             # The window is already hidden and the worker is now finished, so
             # there is no thread left to be destroyed under a running loop.
             QApplication.quit()
+
+    def _hold_awake(self, reason: str) -> Inhibition:
+        """Keep the desktop from locking or sleeping, once for all the work.
+
+        Args:
+            reason: Shown by the desktop; the first job to ask names it.
+
+        Returns:
+            The request in force, new or already held.
+        """
+        if self._awake is None:
+            self._awake = keep_awake(reason)
+        return self._awake
 
     def _let_sleep(self) -> None:
         """Hand locking and sleeping back to the desktop once the work is done.
@@ -1327,26 +1692,15 @@ class _Window(QWidget):
         Called from the ``finished`` slots rather than the result slots, for
         the same reason the worker state is cleared there: a thread that dies
         without reporting would otherwise keep the machine awake for good.
+        The caller checks that the other worker is not still running.
         """
         if self._awake is not None:
             self._awake.release()
             self._awake = None
 
-    def _busy(self) -> bool:
-        """Whether a worker thread exists, running or still winding down.
-
-        A worker reports its result before its thread has finished: freeing
-        a GPU model still takes a moment after the last segment. Starting
-        the next job in that gap would replace a running QThread, which
-        aborts the process, and the stale ``finished`` would then release
-        the new job's keep-awake. Only the ``finished`` slots drop a worker,
-        so this stays true until that has happened.
-        """
-        return self._recorder is not None or self._transcriber is not None
-
     def _refresh(self) -> None:
         """Bring every control into line with what the window is doing."""
-        idle = not self._busy()
+        free = self._recorder is None
         named = bool(self._course.text().strip())
         self._record.setText("stop" if self._recording else "record")
         self._record.setIcon(
@@ -1355,16 +1709,23 @@ class _Window(QWidget):
         self._record.setProperty("live", self._recording)
         _restyle(self._record)
         self._record.setEnabled(
-            self._recording or (idle and named and bool(self._devices))
+            self._recording or (free and named and bool(self._devices))
         )
         self._mark.setEnabled(self._recording)
-        self._open.setEnabled(idle)
-        self._text.setText("stop" if self._transcribing else "transcribe")
-        self._text.setIcon(_glyph("square", _TEXT) if self._transcribing else QIcon())
-        self._text.setEnabled(self._transcribing or (idle and self._wav is not None))
-        self._course.setEnabled(idle)
-        self._device_box.setEnabled(idle)
-        self._language_box.setEnabled(idle)
+        self._open.setEnabled(free)
+        self._text.setEnabled(
+            free
+            and not self._closing
+            and self._wav is not None
+            and not self._is_queued(self._wav)
+        )
+        running = self._transcriber is not None
+        self._stop_text.setVisible(running)
+        self._stop_text.setEnabled(running and not self._stopping_recognition)
+        self._course.setEnabled(free)
+        self._device_box.setEnabled(free)
+        self._language_box.setEnabled(free)
+        self._model_box.setEnabled(free)
         if self._recording:
             self._chip.show_state("recording", live=True)
         elif self._transcribing:
@@ -1417,30 +1778,45 @@ class _Window(QWidget):
                 event.ignore()
                 return
         if self._transcribing:
+            waiting = len(self._waiting())
+            queued = (
+                f" {_plural(waiting, 'more recording')} waiting will not be "
+                "started either."
+                if waiting
+                else ""
+            )
             answer = QMessageBox.question(
                 self,
                 "lecture scribe",
                 "Recognition is still running.\n"
-                "Stopping it throws away what has been recognised so far; the "
-                "recording itself is safe on disk. Close anyway?",
+                "Stopping it throws away what has been recognised so far."
+                f"{queued} The recordings themselves are safe on disk, and "
+                "`scribe text` on their folder transcribes them later. "
+                "Close anyway?",
                 # No here too, so that Enter means the same in both prompts.
                 defaultButton=QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+
+        # From here on nothing new is queued: a recording stopped below still
+        # reports itself, and would otherwise start a worker on the way out.
+        self._closing = True
+        self._backlog.clear()
+        if self._recorder is not None:
+            self._recorder.stop()
+            self._recorder.wait()
+            # Finished now, so the transcriber's `finished` slot is free to
+            # let the desktop sleep again rather than wait for this one.
+            self._recorder = None
         if self._transcriber is not None:
             # Running, or past its result and still freeing the model: either
             # way the window goes now and the process once `finished` arrives.
-            self._closing = True
             self._transcriber.stop()
             self.hide()
             event.ignore()
             return
-
-        if self._recorder is not None:
-            self._recorder.stop()
-            self._recorder.wait()
         self._let_sleep()
         event.accept()
 

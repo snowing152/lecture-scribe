@@ -33,6 +33,7 @@ from lecture_scribe.config import (
     ConfigError,
     load_config,
     merge_cli,
+    model_source,
 )
 from lecture_scribe.format_text import format_duration, render_transcript
 from lecture_scribe.keep_awake import awake_status, keep_awake
@@ -122,7 +123,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="WAV files to transcribe, or folders to search for recordings "
         "that have no transcript yet",
     )
-    text.add_argument("--model", help="override the configured ASR model")
+    text.add_argument(
+        "--model",
+        help="override the configured ASR model: a name from [models] in "
+        "config.toml, a faster-whisper model name, or a model directory",
+    )
     text.add_argument(
         "--language",
         help="spoken language as a Whisper code, such as ko or en; "
@@ -434,7 +439,7 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
         f"language {config.asr.language}{hinted} ..."
     )
     try:
-        model = load_model(config.asr.model, gpu=config.asr.gpu)
+        model = load_model(model_source(config), gpu=config.asr.gpu)
     except TranscriptionError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -708,10 +713,18 @@ def _audio_report(config: Config) -> list[str]:
 
 def _asr_report(config: Config) -> list[str]:
     """Print the recognition section of the doctor report and return problems."""
-    status = model_status(config.asr.model)
+    status = model_status(model_source(config))
     gpu = gpu_status()
 
-    _row("model", f"{config.asr.model}, language {config.asr.language}")
+    source = model_source(config)
+    named = (
+        config.asr.model
+        if source == config.asr.model
+        else f"{config.asr.model} ({source})"
+    )
+    _row("model", f"{named}, language {config.asr.language}")
+    for choice in config.models:
+        _row("offered", f"{choice.label}: {choice.note or choice.model}")
     weights = (
         "on disk, loaded without the network"
         if status.cached

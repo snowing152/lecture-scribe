@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from lecture_scribe.config import Config, ConfigError, load_config, merge_cli
+from lecture_scribe.config import (
+    Config,
+    ConfigError,
+    load_config,
+    merge_cli,
+    model_source,
+)
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -173,3 +179,51 @@ def test_the_hotwords_flag_overrides_the_file() -> None:
     assert config.asr.hotwords == "K-means"
     assert merge_cli(config).asr.hotwords == "K-means"
     assert merge_cli(Config()).asr.hotwords == ""
+
+
+def test_models_are_offered_in_order_with_their_notes(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        [models.large-v3]
+        model = "large-v3"
+        note = "default"
+
+        [models.buzz-korean]
+        model = "~/models/buzz-korean"
+        note = "Korean-tuned"
+        """,
+    )
+
+    models = load_config(path).models
+
+    assert [choice.label for choice in models] == ["large-v3", "buzz-korean"]
+    assert models[0].model == "large-v3"
+    # A directory under the home folder is expanded; a hub name is left alone.
+    assert models[1].model == str(Path("~/models/buzz-korean").expanduser())
+    assert models[1].note == "Korean-tuned"
+
+
+def test_a_label_names_the_model_behind_it(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        '[asr]\nmodel = "buzz"\n\n[models.buzz]\nmodel = "/opt/models/buzz"\n',
+    )
+    config = load_config(path)
+
+    assert model_source(config) == "/opt/models/buzz"
+    assert model_source(merge_cli(config, model="medium")) == "medium"
+
+
+def test_a_model_entry_needs_a_model(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[models.buzz]\nnote = "Korean-tuned"\n')
+
+    with pytest.raises(ConfigError, match=r"\[models\.buzz\] needs a model"):
+        load_config(path)
+
+
+def test_a_model_entry_rejects_unknown_keys(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[models.buzz]\nmodel = "x"\nnotes = "typo"\n')
+
+    with pytest.raises(ConfigError, match="did you mean 'note'"):
+        load_config(path)
