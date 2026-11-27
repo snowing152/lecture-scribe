@@ -695,6 +695,62 @@ def test_a_model_is_loaded_once_per_run_of_recordings_that_ask_for_it(
     assert "/models/buzz" not in texts[0]
 
 
+def test_with_transcribe_after_stop_off_a_recording_waits_in_the_list(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    window._auto.setChecked(False)
+    wav = tmp_path / "lectures" / "a" / "a.wav"
+
+    _stop_recording(window, wav)
+
+    assert window._transcriber is None
+    assert "Transcribe after stop is off" in window._status.text()
+    assert [lecture.wav for lecture in window._lectures] == [wav]
+
+
+def test_the_transcripts_column_lists_the_folder_and_searches_it(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    plain = _wav(tmp_path / "lectures" / "2026-11-24_net" / "2026-11-24_net.wav")
+    _wav(tmp_path / "lectures" / "2026-11-25_os" / "2026-11-25_os.wav")
+    plain.with_suffix(".txt").write_text(
+        "2026-11-24_net -- buzz-korean (ko), 0:50:08\n\n"
+        "[00:01] 지난 시간에 이어서\n\n[12:40] 패킷 로스가 발생합니다\n",
+        encoding="utf-8",
+    )
+    window = _window(tmp_path)
+
+    assert window._done_col._count.text() == "2"
+    window._search.setText("패킷")
+
+    assert window._done_col._count.text() == "1"
+    hit = next(iter(window._done_col._cards))
+    assert isinstance(hit, tuple)
+    assert hit[0].wav == plain
+
+
+def test_a_recording_without_a_transcript_can_be_queued_from_the_list(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    wav = _wav(tmp_path / "lectures" / "a" / "a.wav")
+    marks_path(wav).write_text("5.0\n", encoding="utf-8")
+    window = _window(tmp_path)
+
+    window._transcribe_wav(wav, 0.1)
+
+    assert _queued(window) == [wav]
+    assert window._queued[wav].marks == (5.0,)
+
+
 @pytest.mark.manual
 def test_window_opens_and_lists_the_devices() -> None:
     """Needs a display and a working sound backend."""

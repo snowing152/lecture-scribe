@@ -174,7 +174,11 @@ From top to bottom: the **options** (course, device, language, model), the
    beside the recording as you press it, and its paragraph gets `>>>`.
 6. Press **Stop** when the lecture ends. A card for it appears under
    **Waiting**, moves to **Transcribing** with a progress bar, and ends up
-   under **Transcripts**.
+   under **Transcripts**. Untick **Transcribe after stop** to keep a recording
+   for later instead.
+8. **Transcripts** lists every lecture in the folder, newest first. The
+   search field above it looks through names and the text of every
+   transcript, and shows the first matching line with its timecode.
 7. **Record the next lecture whenever you like.** The queue works through the
    recordings one after another meanwhile.
 
@@ -183,7 +187,11 @@ From top to bottom: the **options** (course, device, language, model), the
 | **Record** / **Stop** | | start and finish a recording |
 | **Mark** | <kbd>Ctrl</kbd>+<kbd>M</kbd> | flag this moment; the paragraph gets `>>>` in the file |
 | **Stop all** (Transcribing) | | stop recognition and clear the queue; the recordings stay on disk |
-| **Open transcript** (a card) | | read it in place of the queue; **← Back to queue** returns |
+| **Transcribe after stop** (Waiting) | | on by default; off, a stopped recording waits under Transcripts |
+| **Open transcript** (a card) | | read it in place of the queue, at the line the search found; **← Back to queue** returns |
+| **Transcribe** (a card) | | queue a lecture that has no transcript yet |
+| mark buttons (reading view) | | jump to each marked paragraph |
+| **Open in editor** (reading view) | | open the `.txt` in the system's text editor |
 | **Open file…** (Transcripts) | <kbd>Ctrl</kbd>+<kbd>O</kbd> | pick an earlier recording, or any WAV file; its marks come with it |
 | **Transcribe** (reading view) | | queue the recording you are reading |
 
@@ -449,6 +457,7 @@ of these, or leave it off after `uv tool install`.
 | `scribe rec --course os` | record until <kbd>Ctrl</kbd>+<kbd>C</kbd> |
 | `scribe text lecture.wav` | transcribe one or more recordings, writing a `.txt` beside each |
 | `scribe text ~/lectures` | give it a folder instead: every recording under it that has no transcript yet |
+| `scribe list` | every lecture in the folder: length, model or `not transcribed`, marks |
 | `scribe gui` | open the window |
 | `scribe launcher` | add the window to the Start Menu / app menu (`--remove` undoes it) |
 

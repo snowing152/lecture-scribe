@@ -69,6 +69,7 @@ cli.py             argument parsing, printing and wiring, nothing else
 gui.py             the desktop window (Qt), wiring and drawing, nothing else
 launcher.py        desktop menu entry, both platforms
 keep_awake.py      keep the desktop from locking or sleeping while working
+library.py         the lectures on disk, listed and searched (pure reporting)
 ```
 
 `format_text.py` never touches the disk. Neither `cli.py` nor `gui.py` holds
@@ -377,5 +378,5 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |
 | Q | transcription queue in the window: record the next lecture while earlier ones are recognised | done -- checked by hand on Windows 11, 2026-11-27; see D-27 |
 | W | model list in the window from `[models]`, each with a note; `--model` takes the same names | done -- checked by hand on Windows 11, 2026-11-27; see D-28 |
-| D | window redesign: options bar, recording strip with a live waveform, the queue as three animated columns, a reading view | step 1 done -- checked by hand on Windows 11, 2026-11-27; step 2 (library, search) to come -- see D-30 |
+| D | window redesign: options bar, recording strip with a live waveform, the queue as three animated columns, a reading view | step 1 done -- checked by hand on Windows 11, 2026-11-27; step 2 (library with search, mark links, Open in editor, Transcribe after stop, `scribe list`) built 2026-11-27, tests pass, not yet run by hand -- see D-30 |
 | S | playback speed: a recording made at 1.25x gets its timecodes and marks scaled back to video time; speed saved in `<recording>.speed`, chosen in the window and by `scribe rec --speed` | planned -- first compare 10 minutes recorded at 1.0 and 1.25 to see whether recognition suffers |

@@ -304,4 +304,10 @@ user point by point:
   the folder with search, recordings without a transcript get a Transcribe
   button, marks become jump links in the reading view, and `scribe list`
   prints the same list from a new `library.py`.
-
+- **Step 2, built the same day:** `library.py` lists and searches the
+  lectures for both front ends (`scribe list` prints the same list). Search
+  is a plain case-insensitive substring over names and passages, so
+  `프로토콜` finds `프로토콜의`, and it does not ignore spacing: `패킷 로스`
+  does not find `패킷로스`. A **Transcribe after stop** toggle, on by
+  default and not saved, lets a recording wait for later; the user asked
+  for it while a batch was using the GPU.

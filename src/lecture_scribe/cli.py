@@ -35,11 +35,16 @@ from lecture_scribe.config import (
     merge_cli,
     model_source,
 )
-from lecture_scribe.format_text import format_duration, render_transcript
+from lecture_scribe.format_text import (
+    display_width,
+    format_duration,
+    render_transcript,
+)
 from lecture_scribe.keep_awake import awake_status, keep_awake
 from lecture_scribe.launcher import LauncherError
 from lecture_scribe.launcher import install as install_launcher
 from lecture_scribe.launcher import remove as remove_launcher
+from lecture_scribe.library import list_lectures
 from lecture_scribe.transcribe import (
     Decoding,
     TranscriptionError,
@@ -92,6 +97,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             merge_cli(config, model=model, language=language, hotwords=hotwords),
             wavs,
         )
+    if command == "list":
+        folder: Path | None = args.folder
+        return _list(config.output.dir if folder is None else folder)
     if command == "gui":
         return _gui(config)
     if command == "launcher":
@@ -139,6 +147,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "course, in one quoted string; overrides asr.hotwords",
     )
 
+    listing = commands.add_parser(
+        "list", help="list the recorded lectures and whether each is transcribed"
+    )
+    listing.add_argument(
+        "folder",
+        nargs="?",
+        type=Path,
+        help="folder to list; defaults to output.dir from config.toml",
+    )
+
     commands.add_parser("gui", help="open the desktop window")
 
     launcher = commands.add_parser(
@@ -173,6 +191,35 @@ def _gui(config: Config) -> int:
         )
         return 1
     return run(config)
+
+
+def _list(folder: Path) -> int:
+    """Print one row per lecture under a folder, newest first.
+
+    Args:
+        folder: Directory holding the lecture folders.
+
+    Returns:
+        The process exit code: 1 if the folder does not exist.
+    """
+    if not folder.is_dir():
+        print(f"error: {folder} is not a folder", file=sys.stderr)
+        return 1
+    lectures = list_lectures(folder)
+    if not lectures:
+        print(f"no recordings under {folder}")
+        return 0
+    # Korean syllables take two columns, so len() would misalign the rows.
+    width = max(display_width(lecture.name) for lecture in lectures)
+    for lecture in lectures:
+        length = "?" if lecture.seconds is None else format_duration(lecture.seconds)
+        state = lecture.model or (
+            "not transcribed" if lecture.transcript is None else "transcribed"
+        )
+        marks = f"  {lecture.marks} marks" if lecture.marks else ""
+        pad = " " * (width - display_width(lecture.name))
+        print(f"  {lecture.name}{pad}  {length:>8}  {state}{marks}")
+    return 0
 
 
 def _launcher(*, remove: bool) -> int:

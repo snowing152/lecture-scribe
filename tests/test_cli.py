@@ -312,3 +312,21 @@ def test_a_recording_in_progress_is_skipped_and_named(
     out = capsys.readouterr().out
     assert "skipped" in out
     assert "live.wav" in out
+
+
+def test_list_prints_a_row_per_lecture_and_fails_on_a_missing_folder(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = tmp_path / "net"
+    folder.mkdir()
+    sf.write(folder / "net.wav", np.zeros(32_000, dtype="float32"), 16_000)
+    (folder / "net.txt").write_text("net -- large-v3 (ko), 0:00:02\n\n[00:01] hi\n")
+
+    assert cli._list(tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "net" in out
+    assert "0:00:02" in out
+    assert "large-v3" in out
+
+    assert cli._list(tmp_path / "nope") == 1
+    assert "not a folder" in capsys.readouterr().err

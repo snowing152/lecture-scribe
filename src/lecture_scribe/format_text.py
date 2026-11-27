@@ -284,7 +284,7 @@ def _render_paragraph(paragraph: _Paragraph, *, marked: bool, with_hour: bool) -
     return _wrap(paragraph.text, prefix=prefix, width=_LINE_WIDTH)
 
 
-def _columns(text: str) -> int:
+def display_width(text: str) -> int:
     """Count the terminal columns a string takes up.
 
     A Korean syllable is two columns wide where a Latin letter is one, so
@@ -325,7 +325,7 @@ def _wrap(text: str, *, prefix: str, width: int) -> str:
     used = len(prefix)
     fresh = True
     for word in words:
-        needed = _columns(word)
+        needed = display_width(word)
         if not fresh and used + 1 + needed > width:
             lines.append(line)
             line, used, fresh = indent, len(indent), True

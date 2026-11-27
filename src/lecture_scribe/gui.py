@@ -27,6 +27,7 @@ from typing import Literal, cast
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QEvent,
     QMimeData,
     QParallelAnimationGroup,
     QPointF,
@@ -36,12 +37,14 @@ from PySide6.QtCore import (
     Qt,
     QThread,
     QTimer,
+    QUrl,
     QVariantAnimation,
     Signal,
 )
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
+    QDesktopServices,
     QFont,
     QIcon,
     QKeySequence,
@@ -59,6 +62,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QBoxLayout,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -113,6 +117,7 @@ from lecture_scribe.format_text import (
 )
 from lecture_scribe.keep_awake import Inhibition, keep_awake
 from lecture_scribe.launcher import APP_USER_MODEL_ID, DESKTOP_ID, ICON
+from lecture_scribe.library import Hit, Lecture, list_lectures, search
 from lecture_scribe.transcribe import (
     Decoding,
     Transcription,
@@ -283,6 +288,18 @@ QPushButton#mark:hover {{ border-color: {_MARK}; }}
 QPushButton#mark:disabled {{
     background: transparent; border-color: {_LINE}; color: {_FAINT};
 }}
+QPushButton#chip {{
+    background: {_MARK_WASH}; border: 1px solid {_MARK_WASH}; border-radius: 11px;
+    padding: 2px 10px; color: {_MARK};
+}}
+QPushButton#chip:hover {{ border-color: {_MARK}; }}
+QCheckBox {{ color: {_MUTED}; spacing: 6px; }}
+QCheckBox::indicator {{
+    width: 14px; height: 14px; border-radius: 4px;
+    border: 1px solid {_DASH}; background: {_RAISED};
+}}
+QCheckBox::indicator:checked {{ background: {_ACCENT}; border-color: {_ACCENT}; }}
+QCheckBox:focus {{ color: {_TEXT}; }}
 QPushButton#link {{
     background: transparent; border: none; padding: 2px 4px; color: {_ACCENT};
 }}
@@ -1148,9 +1165,19 @@ class _Column(QFrame):
         column.addWidget(scroll, 1)
         self._cards: dict[Hashable, _JobCard] = {}
 
-    def add_action(self, button: QPushButton) -> None:
-        """Put a button at the right end of the heading."""
-        self._head.addWidget(button)
+    def add_action(self, widget: QWidget) -> None:
+        """Put a button or a toggle at the right end of the heading."""
+        self._head.addWidget(widget)
+
+    def add_below_heading(self, widget: QWidget) -> None:
+        """Put a widget between the heading and the cards, such as a search field."""
+        layout = cast(QVBoxLayout, self.layout())
+        # After the heading and the subtitle, before the empty note and cards.
+        layout.insertWidget(2, widget)
+
+    def set_empty_text(self, text: str) -> None:
+        """Change what the column says while it holds no cards."""
+        self._empty.setText(text)
 
     def set_subtitle(self, text: str) -> None:
         """Say what the stage is doing under its heading; hidden when empty."""
@@ -1312,6 +1339,7 @@ class _Transcript(QTextEdit):
         self.setFont(font)
         self.document().setDocumentMargin(2)
         self._source = ""
+        self._marked: list[tuple[int, str]] = []
 
     def show_transcript(self, text: str) -> None:
         """Replace what is shown with a whole transcript.
@@ -1321,14 +1349,32 @@ class _Transcript(QTextEdit):
         """
         header, passages = read_transcript(text)
         parts = [] if not header else [_header_html(header)]
-        parts.extend(_passage_html(passage) for passage in passages)
+        parts.extend(_passage_html(passage, i) for i, passage in enumerate(passages))
         self.setHtml("".join(parts))
         self._source = text
+        self._marked = [
+            (i, passage.timecode)
+            for i, passage in enumerate(passages)
+            if passage.marked
+        ]
+
+    def marked(self) -> list[tuple[int, str]]:
+        """The marked paragraphs shown, as their index and timecode."""
+        return list(self._marked)
+
+    def scroll_to(self, index: int) -> None:
+        """Bring a paragraph to the top of the pane.
+
+        Args:
+            index: The paragraph's position among those of the transcript.
+        """
+        self.scrollToAnchor(f"p{index}")
 
     def clear(self) -> None:
         """Empty the pane and forget the text behind it."""
         super().clear()
         self._source = ""
+        self._marked = []
 
     def createMimeDataFromSelection(self) -> QMimeData:  # noqa: N802 (Qt override)
         """Copy the text as it is on disk when everything is selected.
@@ -1351,21 +1397,20 @@ class _Transcript(QTextEdit):
 
 @dataclass(frozen=True, slots=True)
 class _Done:
-    """A recording the queue has finished with, shown under Transcripts.
+    """A recording that failed in this session, shown under Transcripts.
+
+    Successes need no record of their own: the folder holds their
+    transcript, and the column lists the folder.
 
     Attributes:
-        key: Tells two runs of one recording apart on the board.
+        key: Tells two failures of one recording apart on the board.
         wav: The recording.
-        transcript: The file written, or ``None`` when recognition failed.
-        note: How long it took, or what went wrong.
-        problem: Whether it failed.
+        note: What went wrong, in a few words.
     """
 
     key: int
     wav: Path
-    transcript: Path | None
     note: str
-    problem: bool = False
 
 
 class _Window(QWidget):
@@ -1393,7 +1438,12 @@ class _Window(QWidget):
         self._current: Path | None = None
         # Every recording queued in this session, for its card.
         self._queued: dict[Path, _Job] = {}
+        # Recordings that failed in this session; the rest of the Transcripts
+        # column is read from the folder.
         self._finished: list[_Done] = []
+        self._lectures: list[Lecture] = []
+        # The transcript being read, for Open in editor.
+        self._reading: Path | None = None
         self._next_key = 0
         # One request covers recording and recognition, which may overlap;
         # it is let go only once neither is running.
@@ -1411,7 +1461,7 @@ class _Window(QWidget):
         self._load_devices()
         self._load_languages()
         self._load_models()
-        self._sync_board()
+        self._reload_library()
         self._refresh()
 
     def _build(self) -> None:
@@ -1549,7 +1599,7 @@ class _Window(QWidget):
         return strip
 
     def _build_board(self) -> QWidget:
-        """The queue: waiting, being transcribed, and done."""
+        """The queue: waiting, being transcribed, and every lecture in the folder."""
         board = QWidget()
         self._board = QBoxLayout(QBoxLayout.Direction.LeftToRight, board)
         self._board.setContentsMargins(0, 0, 0, 0)
@@ -1560,9 +1610,17 @@ class _Window(QWidget):
         )
         self._working_col = _Column("Transcribing", _ACCENT, "The GPU is free.")
         self._done_col = _Column(
-            "Transcripts", _DONE, "Finished transcripts appear here."
+            "Transcripts", _DONE, "No recordings in the lecture folder yet."
         )
         self._queue_line = self._working_col.subtitle
+
+        self._auto = QCheckBox("Transcribe after stop")
+        self._auto.setChecked(True)
+        self._auto.setToolTip(
+            "queue a recording the moment it stops; turned off, it waits under "
+            "Transcripts with a Transcribe button"
+        )
+        self._waiting_col.add_action(self._auto)
 
         self._stop_text = QPushButton("Stop all")
         self._stop_text.setToolTip(
@@ -1573,10 +1631,16 @@ class _Window(QWidget):
 
         self._open = QPushButton("Open file…")
         self._open.setObjectName("link")
-        self._open.setToolTip("transcribe a recording made earlier (Ctrl+O)")
+        self._open.setToolTip("transcribe a recording from outside the folder (Ctrl+O)")
         self._open.setCursor(Qt.CursorShape.PointingHandCursor)
         self._open.clicked.connect(self._open_recording)
         self._done_col.add_action(self._open)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("search names and text")
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(self._sync_board)
+        self._done_col.add_below_heading(self._search)
 
         for column in (self._waiting_col, self._working_col, self._done_col):
             self._board.addWidget(column, 1)
@@ -1597,6 +1661,10 @@ class _Window(QWidget):
         reader_font = self._reader_title.font()
         reader_font.setWeight(QFont.Weight.DemiBold)
         self._reader_title.setFont(reader_font)
+        self._editor = QPushButton("Open in editor")
+        self._editor.setToolTip("open the .txt in the program the system uses for text")
+        self._editor.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._editor.clicked.connect(self._open_in_editor)
         self._text = QPushButton("Transcribe")
         self._text.setObjectName("accent")
         self._text.setToolTip("queue this recording for transcription")
@@ -1604,11 +1672,30 @@ class _Window(QWidget):
         self._text.clicked.connect(self._start_transcription)
         top.addWidget(back)
         top.addWidget(self._reader_title, 1)
+        top.addWidget(self._editor)
         top.addWidget(self._text)
         column.addLayout(top)
+
+        self._chips = QWidget()
+        self._chip_row = QHBoxLayout(self._chips)
+        self._chip_row.setContentsMargins(0, 0, 0, 0)
+        self._chip_row.setSpacing(6)
+        column.addWidget(self._chips)
+        self._chips.hide()
+
         self._transcript = _Transcript()
         column.addWidget(self._transcript, 1)
         return page
+
+    def event(self, event: QEvent) -> bool:
+        """Read the folder again whenever the window comes back to the front.
+
+        A lecture folder renamed or a transcript made by `scribe text` while
+        the window sat behind others would otherwise show as it was.
+        """
+        if event.type() == QEvent.Type.WindowActivate:
+            self._reload_library()
+        return super().event(event)
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 (Qt override)
         """Stack the queue's columns when the window is too narrow for three."""
@@ -1854,10 +1941,13 @@ class _Window(QWidget):
         else:
             # What was captured before an interruption is valid audio, so it
             # is queued like a recording that was stopped by hand.
-            queued = self._enqueue(
-                recording.path, self._marks, seconds=recording.duration
-            )
-            outcome = " · queued for transcription" if queued else ""
+            if self._auto.isChecked():
+                queued = self._enqueue(
+                    recording.path, self._marks, seconds=recording.duration
+                )
+                outcome = " · queued for transcription" if queued else ""
+            else:
+                outcome = " · kept for later: Transcribe after stop is off"
             if recording.interrupted is not None:
                 self._say(f"{recording.interrupted}{outcome}", problem=True)
             else:
@@ -1866,6 +1956,7 @@ class _Window(QWidget):
                     f"{_short_path(recording.path)}{outcome}",
                     path=recording.path,
                 )
+        self._reload_library()
         self._refresh()
 
     def _on_record_failed(self, message: str) -> None:
@@ -1988,8 +2079,7 @@ class _Window(QWidget):
             f"{path.parent.name}   ·   {format_duration(existing.duration)}"
         )
         self._show_earlier_transcript(existing, marks=len(marks))
-        self._pages.setCurrentIndex(_READER)
-        self._refresh()
+        self._show_reader(earlier_transcript(path))
 
     def _show_earlier_transcript(
         self, existing: ExistingRecording, *, marks: int
@@ -2030,34 +2120,88 @@ class _Window(QWidget):
             path=existing.path,
         )
 
-    def _read_only(self, done: _Done) -> None:
-        """Show a finished transcript without making its recording the one in view.
+    def _read_only(self, lecture: Lecture) -> None:
+        """Show a transcript without making its recording the one in view.
 
         For a card clicked during a recording: the recording in view is the
         one being captured, and its marks must stay where they are.
         """
-        if done.transcript is None:
+        if lecture.transcript is None:
             return
         try:
-            text = done.transcript.read_text(encoding="utf-8")
+            text = lecture.transcript.read_text(encoding="utf-8")
         except OSError as error:
-            self._say(f"cannot read {done.transcript}: {error}", problem=True)
+            self._say(f"cannot read {lecture.transcript}: {error}", problem=True)
             return
-        self._reader_title.setText(done.wav.parent.name)
+        self._reader_title.setText(lecture.name)
         self._transcript.show_transcript(text)
+        self._show_reader(lecture.transcript)
+
+    def _show_reader(self, transcript: Path | None) -> None:
+        """Switch to the reading view, with a jump link for every mark in it.
+
+        Args:
+            transcript: The file shown, for Open in editor; ``None`` when the
+                recording has none yet.
+        """
+        self._reading = transcript
+        while (item := self._chip_row.takeAt(0)) is not None:
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        marked = self._transcript.marked()
+        for index, timecode in marked:
+            chip = QPushButton(timecode)
+            chip.setObjectName("chip")
+            chip.setToolTip("jump to this mark")
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.clicked.connect(partial(self._transcript.scroll_to, index))
+            self._chip_row.addWidget(chip)
+        self._chip_row.addStretch(1)
+        self._chips.setVisible(bool(marked))
         self._pages.setCurrentIndex(_READER)
         self._refresh()
 
-    def _open_done(self, done: _Done) -> None:
-        """Open a finished card: read it, or bring a failed one up to retry."""
+    def _open_in_editor(self) -> None:
+        """Hand the transcript to the system's own program for text files."""
+        if self._reading is None:
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._reading))):
+            self._say(
+                f"no program opened {_short_path(self._reading)}; it is a plain "
+                "UTF-8 text file",
+                problem=True,
+                path=self._reading,
+            )
+
+    def _open_lecture(self, hit: Hit) -> None:
+        """Read a lecture from the list, at the paragraph the search found."""
         if self._recorder is not None:
-            self._read_only(done)
+            self._read_only(hit.lecture)
         else:
-            self._view_recording(done.wav)
+            self._view_recording(hit.lecture.wav)
+        if hit.passage is not None:
+            self._transcript.scroll_to(hit.passage)
+
+    def _transcribe_wav(self, wav: Path, seconds: float | None) -> None:
+        """Queue a recording from the list, with the marks saved beside it.
+
+        Allowed during a recording too: its marks come from its own file,
+        never from the lecture being captured.
+        """
+        try:
+            marks = read_marks(wav)
+        except (ValueError, OSError) as error:
+            self._say(str(error), problem=True)
+            return
+        if self._enqueue(wav, marks, seconds=seconds or 0.0):
+            self._say(f"{_short_path(wav)} · queued for transcription", path=wav)
+        self._refresh()
 
     def _show_board(self) -> None:
         """Go back from reading to the queue."""
         self._pages.setCurrentIndex(_BOARD)
+        self._reload_library()
 
     def _start_transcription(self) -> None:
         """Queue the recording in view, behind any already being recognised."""
@@ -2143,8 +2287,13 @@ class _Window(QWidget):
         queued = [] if self._transcriber is None else self._transcriber.jobs.jobs()
         return queued + list(self._backlog)
 
+    def _reload_library(self) -> None:
+        """Read the lecture folder again and redraw the board."""
+        self._lectures = list_lectures(self._config.output.dir)
+        self._sync_board()
+
     def _sync_board(self) -> None:
-        """Bring the three columns into line with the queue."""
+        """Bring the three columns into line with the queue and the folder."""
         self._waiting_col.sync(
             [
                 (job.wav, partial(self._job_card, job, working=False))
@@ -2157,8 +2306,27 @@ class _Window(QWidget):
         if current is not None and job is not None:
             working.append((current, partial(self._job_card, job, working=True)))
         self._working_col.sync(working)
-        self._done_col.sync(
-            [(done.key, partial(self._done_card, done)) for done in self._finished]
+
+        done: list[tuple[Hashable, Callable[[], _JobCard]]] = [
+            (("failed", item.key), partial(self._done_card, item))
+            for item in self._finished
+        ]
+        # The lecture being captured is not offered: its file is still growing.
+        shown = [
+            lecture
+            for lecture in self._lectures
+            if not (self._recording and lecture.wav == self._wav)
+        ]
+        query = self._search.text()
+        for hit in search(shown, query):
+            queued = self._is_queued(hit.lecture.wav)
+            key = (hit.lecture, queued, hit.passage, query.strip() != "")
+            done.append((key, partial(self._lecture_card, hit, queued)))
+        self._done_col.sync(done)
+        self._done_col.set_empty_text(
+            f"Nothing matches '{query.strip()}'."
+            if query.strip()
+            else "No recordings in the lecture folder yet."
         )
 
     def _job_card(self, job: _Job, *, working: bool) -> _JobCard:
@@ -2172,14 +2340,39 @@ class _Window(QWidget):
         )
 
     def _done_card(self, done: _Done) -> _JobCard:
-        """Build the card of a recording the queue has finished with."""
+        """Build the card of a recording that failed in this session."""
         card = _JobCard(
-            done.wav.parent.name,
-            done.note,
-            action="Try again" if done.problem else "Open transcript",
-            problem=done.problem,
+            done.wav.parent.name, done.note, action="Try again", problem=True
         )
-        card.opened.connect(lambda: self._open_done(done))
+        card.opened.connect(partial(self._transcribe_wav, done.wav, None))
+        return card
+
+    def _lecture_card(self, hit: Hit, queued: bool) -> _JobCard:
+        """Build the card of a lecture in the folder, transcribed or not."""
+        lecture = hit.lecture
+        parts = [
+            "length unknown"
+            if lecture.seconds is None
+            else f"{round(lecture.seconds / 60)} min",
+            lecture.model or "transcribed"
+            if lecture.transcript is not None
+            else "not transcribed",
+        ]
+        if lecture.marks:
+            parts.append(_plural(lecture.marks, "mark"))
+        meta = "   ·   ".join(parts)
+        if hit.timecode is not None:
+            meta += f"\n{hit.timecode}   {hit.excerpt}"
+        if queued:
+            return _JobCard(lecture.name, meta, right="queued")
+        if lecture.transcript is None:
+            card = _JobCard(lecture.name, meta, action="Transcribe")
+            card.opened.connect(
+                partial(self._transcribe_wav, lecture.wav, lecture.seconds)
+            )
+            return card
+        card = _JobCard(lecture.name, meta, action="Open transcript")
+        card.opened.connect(partial(self._open_lecture, hit))
         return card
 
     def _stop_transcription(self) -> None:
@@ -2240,9 +2433,10 @@ class _Window(QWidget):
             f"({result.decode_ratio:.2f}x audio length)   ·   "
             f"{_plural(len(result.segments), 'segment')}"
         )
-        self._finish(wav, path, took, problem=False)
+        self._reload_library()
         if self._pages.currentIndex() == _READER and wav == self._wav:
             self._transcript.show_transcript(text)
+            self._show_reader(path)
         self._say(f"wrote {_short_path(path)} · {took}", path=path)
         self._refresh()
 
@@ -2262,21 +2456,15 @@ class _Window(QWidget):
     def _finish_one(self, message: str, *, problem: bool) -> None:
         """Clear the recording that ended without a transcript, and say why."""
         if problem and self._current is not None:
-            self._finish(
-                self._current, None, "failed: see the line above", problem=True
-            )
+            self._finish(self._current, "failed: see the status line")
         self._current = None
         self._sync_board()
         self._say(message, problem=problem)
         self._refresh()
 
-    def _finish(
-        self, wav: Path, transcript: Path | None, note: str, *, problem: bool
-    ) -> None:
-        """Put a finished recording at the top of the Transcripts column."""
-        self._finished.insert(
-            0, _Done(self._next_key, wav, transcript, note, problem=problem)
-        )
+    def _finish(self, wav: Path, note: str) -> None:
+        """Put a recording that failed at the top of the Transcripts column."""
+        self._finished.insert(0, _Done(self._next_key, wav, note))
         self._next_key += 1
         self._sync_board()
 
@@ -2351,6 +2539,7 @@ class _Window(QWidget):
         self._mark.setEnabled(self._recording)
         self._mark.setText(f"Mark · {len(self._marks)}" if self._recording else "Mark")
         self._open.setEnabled(free)
+        self._editor.setEnabled(self._reading is not None)
         self._text.setEnabled(
             free
             and not self._closing
@@ -2548,7 +2737,7 @@ def _header_html(header: str) -> str:
     )
 
 
-def _passage_html(passage: Passage) -> str:
+def _passage_html(passage: Passage, index: int) -> str:
     """Draw one paragraph as a row: timecode in the gutter, text beside it.
 
     A table because Qt's rich text has no hanging indent that holds when the
@@ -2566,7 +2755,7 @@ def _passage_html(passage: Passage) -> str:
         # its timecode. A fixed pixel width is only a hint to Qt's table
         # layout, and rows of different lengths came out with different
         # gutters. Every timecode in one transcript is the same width.
-        f'<td width="100%"><p style="line-height: 150%;">'
+        f'<td width="100%"><a name="p{index}"></a><p style="line-height: 150%;">'
         f"{html.escape(passage.text)}</p></td></tr></table>"
     )
 
