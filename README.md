@@ -397,7 +397,7 @@ Measured on four lectures of one course (2026-11-27), against `large-v3`:
 | speech recognised (words) | baseline | 4 to 15% more |
 | English terms kept in Latin letters | baseline | about 20 to 40% more |
 | the model counting "1, 2, 3 ..." | once, over a minute of speech | never |
-| time for a 50 minute lecture on the RTX 4060 | 6.4 minutes | 11.9 minutes |
+| time for a 50 minute lecture on the RTX 4060 | 6.4 minutes | 4.7 minutes, with the hotwords of the course |
 
 Neither is free of mistakes, and four lectures are one course. Read the
 same lecture from both before switching.
@@ -421,7 +421,7 @@ faster-whisper falls back to a generic one. Then add it to `config.toml`:
 ```toml
 [models.buzz-korean]
 model = "~/.cache/lecture-scribe/models/buzz-korean"
-note = "Korean-tuned; more speech, English terms kept; slower"
+note = "Korean-tuned; more speech, English terms kept"
 ```
 
 </details>

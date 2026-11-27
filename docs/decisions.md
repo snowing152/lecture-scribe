@@ -257,6 +257,9 @@ read speech the model cards report:
   (2-1, 2-2, 5-1, 6-2) before the user stopped the rest for time.
   `buzz-korean`: 4-15% more words, 20-40% more English terms in Latin, no
   counting, 1.5-1.9 times slower. Both still make mistakes of their own.
+  (Corrected the same day: re-transcribing all nine lectures with the
+  hotword list of 2026-11-27 took 50 minutes, about 11x realtime, 6-2 in
+  282 s, so the slowdown came from the settings, not from the model.)
 - **`[models.<label>]` tables** in `config.toml`, each a `model` (name or
   directory) and a `note`. The label is what `asr.model`, `--model`, the
   window's list and the transcript header use; `config.model_source`

@@ -26,4 +26,4 @@ note = "default; most tested here"
 # A Korean fine-tune of large-v3, converted once; see the README.
 # [models.buzz-korean]
 # model = "~/.cache/lecture-scribe/models/buzz-korean"
-# note = "Korean-tuned; more speech, English terms kept; ~1.7x slower"
+# note = "Korean-tuned; more speech, English terms kept"

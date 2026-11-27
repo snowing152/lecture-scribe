@@ -299,10 +299,14 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 
 ## Non-obvious facts about speed and the GPU, measured on this machine
 
-- **Eight minute slices lie about speed.** On three of them `buzz-korean`
-  decoded in 124 s against 234 s for `large-v3`; on whole lectures it was
-  the slower one, 1.5 to 1.9 times (6-2: 713 s against 386 s). Measure
-  speed on a whole lecture.
+- **One timing of `buzz-korean` is not its speed.** Three measurements of
+  the same model on this GPU disagree: eight minute slices in 124 s against
+  234 s for `large-v3`; whole lectures 1.5 to 1.9 times slower than
+  `large-v3` (6-2: 713 s against 386 s), with the English-heavy hotword
+  list; then all nine 컴넷 lectures in 50 minutes, about 11x realtime
+  (6-2: 282 s), with the list of 2026-11-27 and the counting filter. Retries
+  on audio the decoder doubts seem to drive it, which the hotwords change.
+  Time a whole lecture with the settings in use before quoting a number.
 - **Korean fine-tunes, compared 2026-11-27 (D-28).** `buzz-korean`
   (`BuzzASR/korean`, converted with `ct2-transformers-converter`) found 4-15%
   more words on four lectures and kept 20-40% more English terms in Latin.
