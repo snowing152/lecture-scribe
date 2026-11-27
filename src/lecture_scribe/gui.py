@@ -55,7 +55,6 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
-    QResizeEvent,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -96,10 +95,12 @@ from lecture_scribe.audio_capture import (
     list_loopback_devices,
     loudness,
     read_marks,
+    read_speed,
     record_loopback,
     recording_path,
     remove_if_empty,
     resolve_device,
+    write_speed,
 )
 from lecture_scribe.config import (
     Config,
@@ -132,6 +133,9 @@ from lecture_scribe.transcribe import (
     write_transcript,
 )
 
+_SPEEDS = (1.0, 1.25, 1.5, 2.0)
+"""Playback speeds the window offers, the ones video players have."""
+
 _LANGUAGES = (("ko", "Korean"), ("en", "English"))
 """What the language list offers, as Whisper code and name.
 
@@ -144,9 +148,6 @@ English translation. Any other code still works from ``config.toml``.
 _BOARD = 0
 _READER = 1
 """Pages of the area under the recorder: the queue, or one transcript."""
-
-_STACK_BELOW = 900
-"""Window width under which the queue's three columns stack."""
 
 _UNLIMITED = 16777215
 """Qt's QWIDGETSIZE_MAX: no maximum height."""
@@ -409,6 +410,8 @@ class _Job:
         model: Model to recognise it with, as named in the window or in
             ``asr.model``; fixed when queued, like the language.
         seconds: Length of the recording, for its card on the board.
+        speed: How fast the lecture was played, read from the file saved
+            beside the recording when it started.
     """
 
     wav: Path
@@ -416,6 +419,7 @@ class _Job:
     language: str
     model: str = "large-v3"
     seconds: float = 0.0
+    speed: float = 1.0
 
 
 class _JobQueue:
@@ -606,6 +610,7 @@ class _TranscribeWorker(QThread):
             paragraph_target=config.output.paragraph_target,
             paragraph_max=config.output.paragraph_max,
             marks=list(job.marks),
+            speed=job.speed,
         )
         path = transcript_path(job.wav)
         try:
@@ -1461,6 +1466,7 @@ class _Window(QWidget):
         self._load_devices()
         self._load_languages()
         self._load_models()
+        self._load_speeds()
         self._reload_library()
         self._refresh()
 
@@ -1552,6 +1558,14 @@ class _Window(QWidget):
         self._model_note = QLabel("")
         self._model_note.setObjectName("sub")
         self._model_note.setWordWrap(True)
+        self._speed_box = _Pills()
+        self._speed_box.setToolTip(
+            "how fast the lecture plays; timecodes are given in the video's "
+            "own time. Fixed for a recording when it starts"
+        )
+        second.addWidget(_caption("Speed"))
+        second.addWidget(self._speed_box)
+        second.addSpacing(10)
         second.addWidget(_caption("Model"))
         second.addWidget(self._model_box)
         second.addSpacing(6)
@@ -1614,7 +1628,7 @@ class _Window(QWidget):
         )
         self._queue_line = self._working_col.subtitle
 
-        self._auto = QCheckBox("Transcribe after stop")
+        self._auto = QCheckBox("Auto")
         self._auto.setChecked(True)
         self._auto.setToolTip(
             "queue a recording the moment it stops; turned off, it waits under "
@@ -1697,16 +1711,6 @@ class _Window(QWidget):
             self._reload_library()
         return super().event(event)
 
-    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 (Qt override)
-        """Stack the queue's columns when the window is too narrow for three."""
-        super().resizeEvent(event)
-        narrow = event.size().width() < _STACK_BELOW
-        self._board.setDirection(
-            QBoxLayout.Direction.TopToBottom
-            if narrow
-            else QBoxLayout.Direction.LeftToRight
-        )
-
     def _load_devices(self, *, starting: bool = False) -> LoopbackDevice | None:
         """Read the output devices afresh and select the one to record from.
 
@@ -1778,6 +1782,20 @@ class _Window(QWidget):
         if all(code != configured for code, _name in _LANGUAGES):
             self._language_box.add(configured, configured)
         self._language_box.select(configured)
+
+    def _load_speeds(self) -> None:
+        """Offer the usual playback speeds and select ``audio.speed``.
+
+        A configured speed the list does not offer is added rather than
+        dropped, as a language code is.
+        """
+        configured = self._config.audio.speed
+        speeds = list(_SPEEDS)
+        if configured not in speeds:
+            speeds = sorted([*speeds, configured])
+        for speed in speeds:
+            self._speed_box.add(f"{speed:g}x", f"{speed:g}")
+        self._speed_box.select(f"{configured:g}")
 
     def _load_models(self) -> None:
         """Offer the models of ``[models]`` and select ``asr.model``.
@@ -1865,7 +1883,15 @@ class _Window(QWidget):
             self._say(f"cannot create {folder}: {error}", problem=True)
             return
 
-        self._wav = recording_path(folder)
+        wav = recording_path(folder)
+        try:
+            write_speed(wav, float(self._speed_box.current_data()))
+        except (ValueError, OSError) as error:
+            remove_if_empty(folder)
+            self._say(f"cannot record the playback speed: {error}", problem=True)
+            return
+
+        self._wav = wav
         self._marks = []
         self._elapsed = 0.0
         self._wave.reset()
@@ -1947,7 +1973,7 @@ class _Window(QWidget):
                 )
                 outcome = " · queued for transcription" if queued else ""
             else:
-                outcome = " · kept for later: Transcribe after stop is off"
+                outcome = " · kept for later: Auto transcription is off"
             if recording.interrupted is not None:
                 self._say(f"{recording.interrupted}{outcome}", problem=True)
             else:
@@ -2240,6 +2266,11 @@ class _Window(QWidget):
         if self._is_queued(wav):
             self._say(f"{_short_path(wav)} is already queued for transcription")
             return False
+        try:
+            speed = read_speed(wav)
+        except (ValueError, OSError) as error:
+            self._say(str(error), problem=True, path=wav)
+            return False
         chosen = self._recognition_config().asr
         job = _Job(
             wav=wav,
@@ -2247,6 +2278,7 @@ class _Window(QWidget):
             language=chosen.language,
             model=chosen.model,
             seconds=seconds,
+            speed=speed,
         )
         self._queued[wav] = job
         if self._transcriber is None:
@@ -2553,6 +2585,7 @@ class _Window(QWidget):
         self._device_box.setEnabled(free)
         self._language_box.setEnabled(free)
         self._model_box.setEnabled(free)
+        self._speed_box.setEnabled(free)
         if self._recording:
             self._chip.show_state("recording", live=True)
         elif self._transcribing:

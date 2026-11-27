@@ -523,6 +523,85 @@ def read_marks(wav: Path) -> list[float]:
     return marks
 
 
+SPEED_RANGE = (0.25, 4.0)
+"""Playback speeds accepted, inclusive: far beyond what a video player offers."""
+
+
+def speed_path(wav: Path) -> Path:
+    """Locate the file holding the speed the lecture was played at.
+
+    Tied to the WAV, as the marks are, so the two stay a pair when the
+    folder is renamed.
+
+    Args:
+        wav: The recording.
+
+    Returns:
+        The WAV's own name with ``.speed``, whether or not it exists.
+    """
+    return wav.with_suffix(".speed")
+
+
+def write_speed(wav: Path, speed: float) -> None:
+    """Remember that the lecture was played faster or slower than normal.
+
+    Nothing is written at normal speed, which is what a missing file means.
+
+    Args:
+        wav: The recording being made.
+        speed: Playback speed of the video, 1.25 for 1.25x.
+
+    Raises:
+        ValueError: The speed is outside :data:`SPEED_RANGE`.
+        OSError: The file could not be written.
+    """
+    check_speed(speed, where=speed_path(wav).name)
+    if speed != 1.0:
+        speed_path(wav).write_text(f"{speed:g}\n", encoding="utf-8")
+
+
+def read_speed(wav: Path) -> float:
+    """Read back the speed the lecture was played at.
+
+    Args:
+        wav: The recording.
+
+    Returns:
+        The speed; 1.0 when there is no speed file.
+
+    Raises:
+        ValueError: The file does not hold one number within
+            :data:`SPEED_RANGE`.
+        OSError: The file exists but could not be read.
+    """
+    path = speed_path(wav)
+    if not path.is_file():
+        return 1.0
+    text = path.read_text(encoding="utf-8").strip()
+    try:
+        speed = float(text)
+    except ValueError:
+        raise ValueError(f"{path.name}: '{text}' is not a playback speed") from None
+    check_speed(speed, where=path.name)
+    return speed
+
+
+def check_speed(speed: float, *, where: str = "speed") -> None:
+    """Refuse a playback speed outside :data:`SPEED_RANGE`.
+
+    Args:
+        speed: The speed to check.
+        where: What to name in the message, such as the file it came from.
+
+    Raises:
+        ValueError: The speed is out of range, or not a number at all.
+    """
+    low, high = SPEED_RANGE
+    # nan fails both comparisons, so it is refused with the rest.
+    if not low <= speed <= high:
+        raise ValueError(f"{where}: speed {speed:g} is outside {low:g} to {high:g}")
+
+
 def recording_path(folder: Path) -> Path:
     """Name the recording after the lecture folder it goes into.
 

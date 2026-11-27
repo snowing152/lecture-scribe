@@ -227,3 +227,13 @@ def test_a_model_entry_rejects_unknown_keys(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="did you mean 'note'"):
         load_config(path)
+
+
+def test_the_usual_playback_speed_is_read_and_checked(tmp_path: Path) -> None:
+    assert load_config(_write(tmp_path, "[audio]\nspeed = 1.25\n")).audio.speed == 1.25
+    with pytest.raises(ConfigError, match=r"audio\.speed"):
+        load_config(_write(tmp_path, "[audio]\nspeed = 9\n"))
+
+
+def test_the_speed_flag_overrides_the_file() -> None:
+    assert merge_cli(Config(), speed=1.5).audio.speed == 1.5

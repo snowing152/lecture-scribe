@@ -2,6 +2,7 @@
 device = "auto"          # "auto" = monitor of the current output device
 sample_rate = 16000
 silence_rms = 0.001      # blocks quieter than this count as silence
+speed = 1.0              # how fast lectures play, 1.25 for 1.25x
 
 [asr]
 model = "large-v3"

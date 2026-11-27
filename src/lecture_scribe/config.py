@@ -32,11 +32,14 @@ class AudioConfig:
             to follow whatever the system is currently playing through.
         sample_rate: Capture rate in Hz.
         silence_rms: Blocks with a lower RMS than this count as silence.
+        speed: How fast lectures are usually played, 1.25 for 1.25x. The
+            window starts on it; ``scribe rec --speed`` overrides it.
     """
 
     device: str = "auto"
     sample_rate: int = 16000
     silence_rms: float = 0.001
+    speed: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +179,7 @@ def merge_cli(
     config: Config,
     *,
     device: str | None = None,
+    speed: float | None = None,
     model: str | None = None,
     language: str | None = None,
     hotwords: str | None = None,
@@ -188,6 +192,7 @@ def merge_cli(
     Args:
         config: Settings as loaded from ``config.toml``.
         device: Value of ``--device``, or ``None`` when the flag was absent.
+        speed: Value of ``--speed``, or ``None`` when the flag was absent.
         model: Value of ``--model``, or ``None`` when the flag was absent.
         language: Value of ``--language``, or ``None`` when the flag was
             absent.
@@ -200,6 +205,8 @@ def merge_cli(
     result = config
     if device is not None:
         result = replace(result, audio=replace(result.audio, device=device))
+    if speed is not None:
+        result = replace(result, audio=replace(result.audio, speed=speed))
     if model is not None:
         result = replace(result, asr=replace(result.asr, model=model))
     if language is not None:
@@ -228,6 +235,8 @@ def _audio(raw: Mapping[str, Any]) -> AudioConfig:
         silence_rms=_float(
             "audio", raw, "silence_rms", default.silence_rms, minimum=0.0, below=1.0
         ),
+        # The same range a .speed file is held to, see audio_capture.SPEED_RANGE.
+        speed=_float("audio", raw, "speed", default.speed, minimum=0.25, below=4.001),
     )
 
 

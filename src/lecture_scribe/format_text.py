@@ -7,7 +7,7 @@ that string and reads it back, and never touches the disk.
 import re
 from bisect import bisect_right
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from unicodedata import east_asian_width
 
@@ -69,6 +69,7 @@ def render_transcript(
     paragraph_target: float,
     paragraph_max: float,
     marks: Sequence[float] = (),
+    speed: float = 1.0,
 ) -> str:
     """Render recognised segments into the readable .txt transcript.
 
@@ -90,11 +91,27 @@ def render_transcript(
         marks: Timestamps flagged as important during the lecture, in
             seconds. The paragraph that was running when a mark was pressed
             is prefixed with ``>>>``.
+        speed: How fast the lecture was played while it was recorded. Times
+            are given in the video's own time, so a timecode finds its place
+            in the lecture: at 1.25x, ten minutes into the recording is
+            twelve and a half into the video. Paragraphs are formed after
+            the conversion, so their pauses and lengths mean what they would
+            at normal speed.
 
     Returns:
         The complete transcript text, header included, ending in a newline.
     """
-    header = f"{title} -- {model} ({language}), {format_duration(audio_duration)}\n"
+    if speed != 1.0:
+        segments = [
+            replace(segment, start=segment.start * speed, end=segment.end * speed)
+            for segment in segments
+        ]
+        marks = [mark * speed for mark in marks]
+        audio_duration *= speed
+    # Inside the brackets, where a reader of the header already looks for how
+    # the transcript was made, so the length after them stays last.
+    how = language if speed == 1.0 else f"{language}, played at {speed:g}x"
+    header = f"{title} -- {model} ({how}), {format_duration(audio_duration)}\n"
     if not segments:
         return f"{header}\n(no speech recognised)\n"
 

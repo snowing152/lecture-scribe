@@ -290,7 +290,9 @@ user point by point:
   the model's note beside it), a recording strip (record button that pulses
   while live, clock, the last ten seconds of real levels, mark), the status
   line, then the queue as three columns: Waiting, Transcribing, Transcripts.
-  Below 900 px the columns stack.
+  Below 900 px the columns stack. (Dropped the same day: stacked at the
+  minimum height they were too short to use, while three columns of
+  220 px fit side by side at the window's minimum width of 760.)
 - **Colours** each mean one thing: yellow what can be pressed or is in
   progress, pink-red a live recording, orange a mark, green done. Dark only.
 - **No live text while decoding**: the user rarely reads transcripts, so the
@@ -311,3 +313,22 @@ user point by point:
   does not find `패킷로스`. A **Transcribe after stop** toggle, on by
   default and not saved, lets a recording wait for later; the user asked
   for it while a batch was using the GPU.
+
+### D-31 · 2026-11-27 · active: Timecodes follow the video, whatever the playback speed
+
+The user watches lectures at 1.25x, so a transcript's `[40:00]` was fifty
+minutes into the video. Compared first: the same 1.5 minutes recorded at
+1.0, 1.25 and 1.5 came out with nearly the same text, so faster playback
+is not discouraged.
+- **The speed is said, never guessed**: chosen in the window (1x, 1.25x,
+  1.5x, 2x, starting on `audio.speed`), or `scribe rec --speed`. It is
+  saved the moment the recording starts, in `<recording>.speed` beside the
+  marks file, and nothing is written at normal speed.
+- **`render_transcript` converts once, before paragraphs are formed**:
+  segment times, marks and the length are multiplied by the speed, so
+  `paragraph_gap` and the paragraph lengths keep their meaning at any speed.
+- **The header says it inside the brackets**, `(ko, played at 1.25x)`, so
+  the length stays last and `library.py` still reads it.
+- A damaged `.speed` file is an error, like a damaged marks file, and
+  stops that one recording from being queued.
+

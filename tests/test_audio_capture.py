@@ -23,9 +23,12 @@ from lecture_scribe.audio_capture import (
     loudness,
     marks_path,
     read_marks,
+    read_speed,
     recording_path,
     remove_if_empty,
     resolve_device,
+    speed_path,
+    write_speed,
 )
 
 SPEAKER = LoopbackDevice(name="Ryzen Speaker", id="alsa_output.pci", is_default=True)
@@ -434,3 +437,33 @@ def test_a_line_that_is_not_an_offset_is_refused_with_its_number(
 
     with pytest.raises(ValueError, match="line 2"):
         read_marks(wav)
+
+
+def test_no_speed_file_means_normal_speed(tmp_path: Path) -> None:
+    assert read_speed(tmp_path / "a.wav") == 1.0
+
+
+def test_a_speed_is_kept_beside_the_recording(tmp_path: Path) -> None:
+    fast = tmp_path / "fast.wav"
+    normal = tmp_path / "normal.wav"
+
+    write_speed(fast, 1.25)
+    write_speed(normal, 1.0)
+
+    assert read_speed(fast) == pytest.approx(1.25)
+    # Normal speed writes nothing: a missing file already means it.
+    assert not speed_path(normal).exists()
+
+
+@pytest.mark.parametrize(
+    ("content", "complaint"),
+    [("fast", "not a playback speed"), ("9", "outside"), ("nan", "outside")],
+)
+def test_a_damaged_speed_file_is_an_error(
+    tmp_path: Path, content: str, complaint: str
+) -> None:
+    wav = tmp_path / "a.wav"
+    speed_path(wav).write_text(content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=complaint):
+        read_speed(wav)

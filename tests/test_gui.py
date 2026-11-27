@@ -20,8 +20,15 @@ from lecture_scribe.audio_capture import (
     Recording,
     marks_path,
     read_marks,
+    write_speed,
 )
-from lecture_scribe.config import AsrConfig, Config, ModelChoice, OutputConfig
+from lecture_scribe.config import (
+    AsrConfig,
+    AudioConfig,
+    Config,
+    ModelChoice,
+    OutputConfig,
+)
 from lecture_scribe.keep_awake import Inhibition
 from lecture_scribe.transcribe import GpuStatus, Transcription, TranscriptionError
 
@@ -708,7 +715,7 @@ def test_with_transcribe_after_stop_off_a_recording_waits_in_the_list(
     _stop_recording(window, wav)
 
     assert window._transcriber is None
-    assert "Transcribe after stop is off" in window._status.text()
+    assert "Auto transcription is off" in window._status.text()
     assert [lecture.wav for lecture in window._lectures] == [wav]
 
 
@@ -749,6 +756,36 @@ def test_a_recording_without_a_transcript_can_be_queued_from_the_list(
 
     assert _queued(window) == [wav]
     assert window._queued[wav].marks == (5.0,)
+
+
+def test_the_speed_starts_on_the_configured_one(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    config = Config(
+        audio=AudioConfig(speed=1.25), output=OutputConfig(dir=tmp_path / "lectures")
+    )
+
+    window = gui._Window(config)
+
+    assert window._speed_box.current_data() == "1.25"
+    assert window._speed_box.texts() == ["1x", "1.25x", "1.5x", "2x"]
+
+
+def test_a_recording_is_queued_with_the_speed_saved_beside_it(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    wav = _wav(tmp_path / "lectures" / "a" / "a.wav")
+    write_speed(wav, 1.5)
+    window = _window(tmp_path)
+
+    window._transcribe_wav(wav, 0.1)
+
+    assert window._queued[wav].speed == 1.5
 
 
 @pytest.mark.manual

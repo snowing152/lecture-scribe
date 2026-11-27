@@ -308,6 +308,12 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   (6-2: 282 s), with the list of 2026-11-27 and the counting filter. Retries
   on audio the decoder doubts seem to drive it, which the hotwords change.
   Time a whole lecture with the settings in use before quoting a number.
+- **Playback speed barely changes recognition**, measured once on the
+  first 1.5 minutes of one lecture at 1.0, 1.25 and 1.5 (D-31): near the
+  same text, 1.25 dropped four fillers, 1.5 wrote `유크리드` once, and all
+  three missed `L1 norm`. A paragraph at 00:18 at 1.0 sat at 00:14 at
+  1.25, and 14 x 1.25 = 17.5, which is what `render_transcript(speed=)`
+  undoes.
 - **Korean fine-tunes, compared 2026-11-27 (D-28).** `buzz-korean`
   (`BuzzASR/korean`, converted with `ct2-transformers-converter`) found 4-15%
   more words on four lectures and kept 20-40% more English terms in Latin.
@@ -379,4 +385,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | Q | transcription queue in the window: record the next lecture while earlier ones are recognised | done -- checked by hand on Windows 11, 2026-11-27; see D-27 |
 | W | model list in the window from `[models]`, each with a note; `--model` takes the same names | done -- checked by hand on Windows 11, 2026-11-27; see D-28 |
 | D | window redesign: options bar, recording strip with a live waveform, the queue as three animated columns, a reading view | step 1 done -- checked by hand on Windows 11, 2026-11-27; step 2 (library with search, mark links, Open in editor, Transcribe after stop, `scribe list`) built 2026-11-27, tests pass, not yet run by hand -- see D-30 |
-| S | playback speed: a recording made at 1.25x gets its timecodes and marks scaled back to video time; speed saved in `<recording>.speed`, chosen in the window and by `scribe rec --speed` | planned -- compared 2026-11-27 on the first 1.5 minutes of one lecture at 1.0, 1.25 and 1.5: near the same text (1.25 dropped four fillers, 1.5 wrote `유크리드` once, all three missed `L1 norm`), and 1.25 put a paragraph at 00:14 where 1.0 had 00:18, 14 x 1.25 = 17.5 |
+| S | playback speed: a recording made at 1.25x gets its timecodes and marks scaled back to video time; speed saved in `<recording>.speed`, chosen in the window, `audio.speed` and `scribe rec --speed` | built 2026-11-27, tests pass; not yet run by hand -- see D-31 |

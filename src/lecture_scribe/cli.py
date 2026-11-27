@@ -16,16 +16,20 @@ from lecture_scribe.audio_capture import (
     AudioDeviceError,
     LoopbackDevice,
     Progress,
+    check_speed,
     dbfs,
     inspect_recording,
     lecture_dir,
     list_loopback_devices,
     loudness,
     read_marks,
+    read_speed,
     record_loopback,
     recording_path,
     remove_if_empty,
     resolve_device,
+    speed_path,
+    write_speed,
 )
 from lecture_scribe.config import (
     CONFIG_FILENAME,
@@ -87,7 +91,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "rec":
         device: str | None = args.device
         course: str = args.course
-        return _rec(merge_cli(config, device=device), course)
+        speed: float | None = args.speed
+        return _rec(merge_cli(config, device=device, speed=speed), course)
     if command == "text":
         wavs: list[Path] = args.wav
         model: str | None = args.model
@@ -122,6 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--course", required=True, help="subject name, used in the folder name"
     )
     rec.add_argument("--device", help="substring of the output device to record")
+    rec.add_argument(
+        "--speed",
+        type=float,
+        help="how fast the lecture is played, such as 1.25; the transcript's "
+        "timecodes are then given in the video's own time",
+    )
 
     text = commands.add_parser("text", help="transcribe one or more recordings")
     text.add_argument(
@@ -289,6 +300,9 @@ def _rec(config: Config, course: str) -> int:
 
     try:
         folder = lecture_dir(config.output.dir, course, datetime.now())
+        # Checked before anything is created, so a mistyped --speed leaves
+        # no empty lecture folder behind.
+        check_speed(config.audio.speed)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -304,6 +318,12 @@ def _rec(config: Config, course: str) -> int:
         print(f"error: cannot create {folder}: {error}", file=sys.stderr)
         return 1
     target = recording_path(folder)
+    try:
+        write_speed(target, config.audio.speed)
+    except OSError as error:
+        print(f"error: cannot write {speed_path(target)}: {error}", file=sys.stderr)
+        remove_if_empty(folder)
+        return 1
 
     awake = keep_awake("recording a lecture")
     if stop.is_set():
@@ -425,9 +445,11 @@ def _text(config: Config, wavs: list[Path]) -> int:
             continue
         try:
             inspect_recording(wav)
-            # Read here as well as where it is used, so a damaged marks file
-            # fails in an instant rather than after the model has loaded.
+            # Read here as well as where they are used, so a damaged marks or
+            # speed file fails in an instant rather than after the model has
+            # loaded.
             read_marks(wav)
+            read_speed(wav)
         except AudioDeviceError as error:
             print(f"error: {error}", file=sys.stderr)
             failures += 1
@@ -545,6 +567,7 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
 
         try:
             marks = read_marks(wav)
+            speed = read_speed(wav)
         except (ValueError, OSError) as error:
             # Checked before the model loaded, so this is a file that changed
             # in between. Writing without its marks would drop them silently.
@@ -561,6 +584,7 @@ def _transcribe_all(config: Config, wavs: list[Path], failures: int) -> int:
             paragraph_target=config.output.paragraph_target,
             paragraph_max=config.output.paragraph_max,
             marks=marks,
+            speed=speed,
         )
         text_path = transcript_path(wav)
         try:

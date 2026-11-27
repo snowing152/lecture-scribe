@@ -375,3 +375,36 @@ def test_wrapped_korean_reads_back_as_the_same_text() -> None:
     _header, passages = read_transcript(_one_paragraph(text))
 
     assert passages[0].text == text
+
+
+def test_speed_gives_times_in_the_video_and_says_so() -> None:
+    segments = [
+        Segment(start=0.0, end=4.0, text="첫 문장입니다.", avg_logprob=-0.2),
+        Segment(start=40.0, end=44.0, text="두 번째 문장입니다.", avg_logprob=-0.2),
+    ]
+
+    text = render_transcript(
+        segments,
+        title="lecture",
+        model="buzz-korean",
+        language="ko",
+        audio_duration=60.0,
+        paragraph_gap=1.2,
+        paragraph_target=0.0,
+        paragraph_max=0.0,
+        marks=[41.0],
+        speed=1.25,
+    )
+
+    lines = text.splitlines()
+    # Sixty seconds of recording at 1.25x is seventy-five of the video.
+    assert lines[0] == "lecture -- buzz-korean (ko, played at 1.25x), 0:01:15"
+    # 40 s into the recording is 50 s into the video, and the mark pressed
+    # at 41 s lands on that paragraph once both are converted.
+    assert ">>> [00:50] 두 번째 문장입니다." in text
+
+
+def test_normal_speed_leaves_the_header_as_it_was() -> None:
+    text = _render([Segment(start=0.0, end=1.0, text="말", avg_logprob=-0.2)])
+
+    assert text.splitlines()[0] == "lecture -- large-v3 (ko), 0:00:04"
