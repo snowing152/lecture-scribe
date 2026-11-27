@@ -374,3 +374,4 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | Q | transcription queue in the window: record the next lecture while earlier ones are recognised | done -- checked by hand on Windows 11, 2026-11-27; see D-27 |
 | W | model list in the window from `[models]`, each with a note; `--model` takes the same names | done -- checked by hand on Windows 11, 2026-11-27; see D-28 |
 | D | window redesign: options bar, recording strip with a live waveform, the queue as three animated columns, a reading view | step 1 done -- checked by hand on Windows 11, 2026-11-27; step 2 (library, search) to come -- see D-30 |
+| S | playback speed: a recording made at 1.25x gets its timecodes and marks scaled back to video time; speed saved in `<recording>.speed`, chosen in the window and by `scribe rec --speed` | planned -- first compare 10 minutes recorded at 1.0 and 1.25 to see whether recognition suffers |
