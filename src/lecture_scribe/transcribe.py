@@ -61,12 +61,14 @@ into `hop-to-end`, a word that is on no list.
 
 _ECHO_PUNCTUATION = ".,!?;:\"'()[]"
 
-_COUNTING = re.compile(r"(?:\d+\s*[,.]\s*){9,}\d+[,.]?")
-"""Ten numbers or more in a row: Whisper counting, not the lecturer.
+_COUNTING = re.compile(r"(?<![\d.])(?:\d+\s*,\s*){9,}\d+(?![\d.]),?")
+"""Ten whole numbers or more in a row: Whisper counting, not the lecturer.
 
 Seen twice on 컴넷 6-2, over a minute of real speech each time, as
 `1, 2, 3 ... 59` with repeats, and once run together as `1,2,3,...`. Five or
-six in a row, `시나리오 1, 2, 3, 4, 5`, are left alone.
+six in a row, `시나리오 1, 2, 3, 4, 5`, are left alone. Only whole numbers
+separated by commas count: a number touching a full stop is part of an IP
+address or a decimal, which a networking lecture reads out in lists.
 """
 
 

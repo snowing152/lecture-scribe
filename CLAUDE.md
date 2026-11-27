@@ -202,6 +202,10 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
   joins its `_JobQueue`, and once the worker has found that queue empty the
   queue refuses new work, which waits in `_backlog` for the `finished` slot
   to start a worker of its own.
+- **`began` is sent before the model loads, not after.** A job taken from
+  `_JobQueue` is in no list until the window hears of it; a load that takes
+  minutes on a first download left it on no card, free to be queued twice,
+  and a load failure had nowhere to show. Found by review, 2026-11-27.
 - **Recording and recognition overlap; one keep-awake covers both.** Each
   `finished` slot lets the desktop sleep only when the other worker is gone.
   A recording is queued the moment it stops, with the language shown then

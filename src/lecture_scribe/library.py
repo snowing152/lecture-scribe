@@ -11,9 +11,11 @@ from lecture_scribe.format_text import read_transcript
 from lecture_scribe.transcribe import earlier_transcript
 
 # The header as `render_transcript` writes it: `<title> -- <model> (<lang>), H:MM:SS`.
-# The title is matched lazily because a folder may itself contain " -- ".
+# The title is matched greedily, so the model is what follows the last " --":
+# a lecture title is typed by the user and may contain " -- ", a model label
+# never does.
 _HEADER = re.compile(
-    r"^.*? -- (?P<model>.+) \([^()]*\), (?P<h>\d+):(?P<m>\d\d):(?P<s>\d\d)$"
+    r"^.* -- (?P<model>.+) \([^()]*\), (?P<h>\d+):(?P<m>\d\d):(?P<s>\d\d)$"
 )
 
 _EXCERPT_WIDTH = 80

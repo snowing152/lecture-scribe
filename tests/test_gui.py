@@ -788,6 +788,145 @@ def test_a_recording_is_queued_with_the_speed_saved_beside_it(
     assert window._queued[wav].speed == 1.5
 
 
+def test_a_job_shows_as_started_before_its_model_has_loaded(
+    app: QApplication,  # noqa: ARG001
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review finding: between take() and the end of a slow model load the job
+    # was in no column, so it could be queued a second time.
+    wav = tmp_path / "a" / "a.wav"
+    wav.parent.mkdir()
+    worker = gui._TranscribeWorker(
+        Config(), gui._JobQueue([gui._Job(wav=wav, marks=(), language="ko")])
+    )
+    began: list[Path] = []
+    seen_at_load: list[list[Path]] = []
+
+    def load(*_args: object, **_kwargs: object) -> _Model:
+        seen_at_load.append(list(began))
+        return _Model()
+
+    def recognise(_model: object, _wav: Path, **_kwargs: object) -> Transcription:
+        return Transcription(segments=[], audio_duration=1.0, decode_seconds=1.0)
+
+    monkeypatch.setattr(gui, "load_model", load)
+    monkeypatch.setattr(gui, "transcribe", recognise)
+    worker.began.connect(began.append)
+
+    worker.run()
+
+    assert seen_at_load == [[wav]]
+    assert began == [wav]
+
+
+def test_a_failed_start_at_another_speed_takes_back_its_folder(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    # Review finding: the .speed file written before the device opened kept
+    # the empty folder alive, and the next try went to "<name>-2".
+    window = _window(tmp_path)
+    folder = tmp_path / "lectures" / "2026-11-27_os"
+    folder.mkdir(parents=True)
+    wav = folder / "2026-11-27_os.wav"
+    write_speed(wav, 1.25)
+    window._wav = wav
+    window._recording = True
+
+    window._on_record_failed("cannot record")
+
+    assert not folder.exists()
+
+
+def test_a_finished_recording_never_replaces_another_lecture_being_read(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    # Review finding: reading A during recording C, then C's transcript
+    # arriving, showed C's text under A's title, and Transcribe queued C.
+    lectures = tmp_path / "lectures"
+    a = _wav(lectures / "a" / "a.wav")
+    a.with_suffix(".txt").write_text(
+        "a -- buzz-korean (ko), 0:00:01\n\n[00:00] A text\n", encoding="utf-8"
+    )
+    c = _wav(lectures / "c" / "c.wav")
+    window = _window(tmp_path)
+    window._recorder = object()  # type: ignore[assignment]
+    window._recording = True
+    window._wav = c
+    (lecture_a,) = [lecture for lecture in window._lectures if lecture.wav == a]
+    window._read_only(lecture_a)
+    window._recorder = None
+    window._recording = False
+
+    window._on_transcribed(
+        c,
+        c.with_suffix(".txt"),
+        "c -- buzz-korean (ko), 0:00:01\n\n[00:00] C text\n",
+        Transcription(segments=[], audio_duration=1.0, decode_seconds=1.0),
+    )
+
+    assert "A text" in window._transcript.toPlainText()
+    assert "C text" not in window._transcript.toPlainText()
+    assert not window._text.isEnabled()
+
+
+def test_a_retry_that_succeeds_clears_the_failure_card(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    window = _window(tmp_path)
+    wav = _wav(tmp_path / "lectures" / "a" / "a.wav")
+    window._finish(wav, "failed: see the status line")
+
+    window._on_transcribed(
+        wav,
+        wav.with_suffix(".txt"),
+        "a -- buzz-korean (ko), 0:00:01\n\n[00:00] text\n",
+        Transcription(segments=[], audio_duration=1.0, decode_seconds=1.0),
+    )
+
+    assert window._finished == []
+
+
+def test_one_recording_spelled_two_ways_is_queued_once(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    idle_workers: None,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    wav = _wav(tmp_path / "lectures" / "a" / "a.wav")
+    roundabout = tmp_path / "lectures" / ".." / "lectures" / "a" / "a.wav"
+    window = _window(tmp_path)
+
+    assert window._enqueue(roundabout, [], seconds=1.0)
+    assert not window._enqueue(wav, [], seconds=1.0)
+
+
+def test_a_refined_search_redraws_the_excerpt(
+    app: QApplication,  # noqa: ARG001
+    devices: _Devices,  # noqa: ARG001
+    tmp_path: Path,
+) -> None:
+    wav = _wav(tmp_path / "lectures" / "a" / "a.wav")
+    filler = "가" * 60
+    wav.with_suffix(".txt").write_text(
+        f"a -- buzz-korean (ko), 0:00:01\n\n[00:00] 패킷 {filler} 로스\n",
+        encoding="utf-8",
+    )
+    window = _window(tmp_path)
+    window._search.setText("패킷")
+    first = next(iter(window._done_col._cards.values()))
+
+    window._search.setText("로스")
+
+    assert next(iter(window._done_col._cards.values())) is not first
+
+
 @pytest.mark.manual
 def test_window_opens_and_lists_the_devices() -> None:
     """Needs a display and a working sound backend."""

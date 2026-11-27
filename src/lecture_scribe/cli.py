@@ -26,6 +26,7 @@ from lecture_scribe.audio_capture import (
     read_speed,
     record_loopback,
     recording_path,
+    remove_failed_start,
     remove_if_empty,
     resolve_device,
     speed_path,
@@ -328,7 +329,7 @@ def _rec(config: Config, course: str) -> int:
     awake = keep_awake("recording a lecture")
     if stop.is_set():
         awake.release()
-        if not remove_if_empty(folder):
+        if not remove_failed_start(target):
             print(f"stopped before recording began; {folder} was left as it is")
             return 130
         print("stopped before recording began; nothing was created")
@@ -361,7 +362,7 @@ def _rec(config: Config, course: str) -> int:
         status.clear()
         print(f"audio error: {error}", file=sys.stderr)
         # Nothing was recorded, so the folder made for it is not wanted either.
-        remove_if_empty(folder)
+        remove_failed_start(target)
         return 1
     finally:
         awake.release()

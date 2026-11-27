@@ -834,3 +834,15 @@ def test_a_short_run_of_numbers_is_speech(tmp_path: Path) -> None:
     texts = ["시나리오 1, 2, 3, 4, 5 이렇게 있습니다", "패킷 0, 1, 2, 3 4개를 받았다"]
 
     assert _kept_texts(tmp_path, texts, "") == texts
+
+
+def test_lists_of_addresses_and_decimals_are_speech_not_counting(
+    tmp_path: Path,
+) -> None:
+    # Review finding: the 컴넷 course reads IP addresses aloud.
+    addresses = ", ".join(f"192.168.0.{n}" for n in range(1, 13))
+    decimals = ", ".join(f"0.{n}" for n in range(1, 10))
+
+    kept = _kept_texts(tmp_path, [addresses, decimals], "")
+
+    assert kept == [addresses, decimals]

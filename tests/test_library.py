@@ -154,3 +154,18 @@ def test_an_unreadable_transcript_still_matches_by_name(tmp_path: Path) -> None:
 
     (hit,) = search(list_lectures(tmp_path), "net")
     assert hit.passage is None
+
+
+def test_a_title_holding_the_separator_still_gives_the_model(tmp_path: Path) -> None:
+    # Review finding: a lecture title written by the user may contain " -- ".
+    wav = tmp_path / "os -- notes" / "os -- notes.wav"
+    wav.parent.mkdir()
+    sf.write(wav, np.zeros(1600, dtype=np.float32), 16000)
+    wav.with_suffix(".txt").write_text(
+        "os -- notes -- large-v3 (ko), 0:50:00\n\n[00:01] text\n", encoding="utf-8"
+    )
+
+    (lecture,) = list_lectures(tmp_path)
+
+    assert lecture.model == "large-v3"
+    assert lecture.seconds == 3000.0

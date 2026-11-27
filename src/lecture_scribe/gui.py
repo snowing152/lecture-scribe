@@ -98,6 +98,7 @@ from lecture_scribe.audio_capture import (
     read_speed,
     record_loopback,
     recording_path,
+    remove_failed_start,
     remove_if_empty,
     resolve_device,
     write_speed,
@@ -534,6 +535,11 @@ class _TranscribeWorker(QThread):
         loaded: str | None = None
         model: object = None
         while (job := self.jobs.take()) is not None:
+            # Announced before the model loads, not after: once taken, the
+            # job is no longer in the queue, and a load that takes minutes on
+            # a first download would leave it in no column at all -- free to
+            # be queued a second time, and with nowhere to show a failure.
+            self.began.emit(job.wav)
             if job.model != loaded:
                 # The previous model is let go first: two at once would
                 # crowd 8 GB of video memory.
@@ -557,7 +563,6 @@ class _TranscribeWorker(QThread):
                         "themselves are untouched and can be transcribed again"
                     )
                     return
-            self.began.emit(job.wav)
             self._run_one(model, job)
             if self._stop.is_set():
                 return
@@ -1449,6 +1454,9 @@ class _Window(QWidget):
         self._lectures: list[Lecture] = []
         # The transcript being read, for Open in editor.
         self._reading: Path | None = None
+        # The recording whose transcript the reading view shows. Not always
+        # the one in view: during a recording another can be read.
+        self._reader_wav: Path | None = None
         self._next_key = 0
         # One request covers recording and recognition, which may overlap;
         # it is let go only once neither is running.
@@ -1996,7 +2004,7 @@ class _Window(QWidget):
         if self._wav is not None:
             # Only an empty folder goes: one holding even a header-only WAV
             # stays, since audio is never deleted automatically.
-            remove_if_empty(self._wav.parent)
+            remove_failed_start(self._wav)
         self._wav = None
         self._wave.set_live(False)
         self._wave.reset()
@@ -2096,6 +2104,7 @@ class _Window(QWidget):
             return
 
         self._wav = path
+        self._reader_wav = path
         # The marks of this recording, from the file made as they were
         # pressed; an empty list for a recording with none. Carrying the last
         # lecture's over would put >>> on unrelated sentences.
@@ -2160,6 +2169,7 @@ class _Window(QWidget):
             self._say(f"cannot read {lecture.transcript}: {error}", problem=True)
             return
         self._reader_title.setText(lecture.name)
+        self._reader_wav = lecture.wav
         self._transcript.show_transcript(text)
         self._show_reader(lecture.transcript)
 
@@ -2263,6 +2273,10 @@ class _Window(QWidget):
         """
         if self._closing:
             return False
+        # One spelling per recording: a relative lecture folder and the
+        # absolute path a file dialog returns name the same file, and must not
+        # queue it twice.
+        wav = wav.resolve()
         if self._is_queued(wav):
             self._say(f"{_short_path(wav)} is already queued for transcription")
             return False
@@ -2307,7 +2321,11 @@ class _Window(QWidget):
         worker.start()
 
     def _is_queued(self, wav: Path) -> bool:
-        """Whether a recording is being recognised or waiting to be."""
+        """Whether a recording is being recognised or waiting to be.
+
+        Queued paths are resolved, so this resolves its own as well.
+        """
+        wav = wav.resolve()
         return wav == self._current or wav in self._waiting()
 
     def _waiting(self) -> list[Path]:
@@ -2352,7 +2370,7 @@ class _Window(QWidget):
         query = self._search.text()
         for hit in search(shown, query):
             queued = self._is_queued(hit.lecture.wav)
-            key = (hit.lecture, queued, hit.passage, query.strip() != "")
+            key = (hit.lecture, queued, hit.passage, hit.excerpt)
             done.append((key, partial(self._lecture_card, hit, queued)))
         self._done_col.sync(done)
         self._done_col.set_empty_text(
@@ -2465,8 +2483,12 @@ class _Window(QWidget):
             f"({result.decode_ratio:.2f}x audio length)   ·   "
             f"{_plural(len(result.segments), 'segment')}"
         )
+        # A retry that worked leaves nothing to retry.
+        self._finished = [item for item in self._finished if not _same(item.wav, wav)]
         self._reload_library()
-        if self._pages.currentIndex() == _READER and wav == self._wav:
+        # Only the lecture being read is redrawn: reading another one while
+        # this was recorded, its title would otherwise sit over this text.
+        if self._pages.currentIndex() == _READER and _same(self._reader_wav, wav):
             self._transcript.show_transcript(text)
             self._show_reader(path)
         self._say(f"wrote {_short_path(path)} · {took}", path=path)
@@ -2576,6 +2598,9 @@ class _Window(QWidget):
             free
             and not self._closing
             and self._wav is not None
+            # The button queues the recording in view, so it is offered only
+            # while that is the one being read.
+            and _same(self._reader_wav, self._wav)
             and not self._is_queued(self._wav)
         )
         running = self._transcriber is not None
@@ -2838,6 +2863,13 @@ def _glyph(shape: Literal["dot", "square"], colour: str) -> QIcon:
         painter.end()
         icon.addPixmap(pixmap, mode)
     return icon
+
+
+def _same(first: Path | None, second: Path | None) -> bool:
+    """Whether two paths name one file, however each is spelled."""
+    if first is None or second is None:
+        return False
+    return first.resolve() == second.resolve()
 
 
 def _short_path(path: Path) -> str:

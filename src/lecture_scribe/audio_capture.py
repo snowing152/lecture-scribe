@@ -450,6 +450,28 @@ def remove_if_empty(folder: Path) -> bool:
     return True
 
 
+def remove_failed_start(wav: Path) -> bool:
+    """Take back the folder of a recording that never captured anything.
+
+    The speed file is written when a recording is set up, before the sound
+    device opens, so a start that fails would leave the folder holding it
+    and :func:`remove_if_empty` would keep the folder. That file, which this
+    tool wrote moments before, goes first; it is not audio. The WAV is never
+    touched, so a folder holding one, even header-only, still stays.
+
+    Args:
+        wav: The recording that was to be made.
+
+    Returns:
+        Whether the folder was removed.
+    """
+    try:
+        speed_path(wav).unlink(missing_ok=True)
+    except OSError:
+        return False
+    return remove_if_empty(wav.parent)
+
+
 def marks_path(wav: Path) -> Path:
     """Locate the file holding the marks pressed during a recording.
 
