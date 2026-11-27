@@ -371,6 +371,6 @@ uv tool install --editable ".[cuda]" --force   # the scribe on the PATH, GPU inc
 | F | `scribe text <folder>`: every recording under it without a transcript, any case of `.wav`, skipping one written to in the last 30 s | done |
 | H | `asr.hotwords` / `scribe text --hotwords`: terms of the course as a decoding hint | done — measured once, see below |
 | M | marks saved to `<recording>.marks`, read by the window and by `scribe text` | done — see D-24 |
-| Q | transcription queue in the window: record the next lecture while earlier ones are recognised | built 2026-11-27, tests pass; not yet run by hand -- see D-27 |
-| W | model list in the window from `[models]`, each with a note; `--model` takes the same names | built 2026-11-27, tests pass; not yet run by hand -- see D-28 |
-| D | window redesign: options bar, recording strip with a live waveform, the queue as three animated columns, a reading view | step 1 built 2026-11-27, tests pass; not yet run by hand -- see D-30 |
+| Q | transcription queue in the window: record the next lecture while earlier ones are recognised | done -- checked by hand on Windows 11, 2026-11-27; see D-27 |
+| W | model list in the window from `[models]`, each with a note; `--model` takes the same names | done -- checked by hand on Windows 11, 2026-11-27; see D-28 |
+| D | window redesign: options bar, recording strip with a live waveform, the queue as three animated columns, a reading view | step 1 done -- checked by hand on Windows 11, 2026-11-27; step 2 (library, search) to come -- see D-30 |
